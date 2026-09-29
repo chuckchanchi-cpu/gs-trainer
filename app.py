@@ -25,6 +25,7 @@ import os
 import json
 import re
 import random
+import unicodedata
 import requests
 import streamlit as st
 
@@ -83,6 +84,41 @@ def parse_ai_json(content):
             return _unwrap(json.loads(m.group(0)))
         except json.JSONDecodeError:
             return None
+
+def _norm(s):
+    """正規化文字：全形→半形、刪走空白同引號，用嚟做寬鬆比對"""
+    s = unicodedata.normalize("NFKC", s or "")
+    return re.sub(r"[\s「」『』\"'“”’（）()]+", "", s)
+
+def _match_answer(ans, opts):
+    """AI 嘅 answer 可能加咗 A/B/C/D 前綴、淨係寫字母，或者寫多咗字 — 寬鬆比對返正確選項"""
+    if not ans:
+        return None
+    if ans in opts:
+        return ans
+    na = _norm(ans)
+    if not na:
+        return None
+    for o in opts:
+        if _norm(o) == na:
+            return o
+    m = re.fullmatch(r"[a-dA-D]", na)
+    if m:
+        idx = ord(m.group(0).upper()) - ord("A")
+        if idx < len(opts):
+            return opts[idx]
+    m = re.match(r"^[a-dA-D][.、)）:：]\s*(.+)$", ans.strip())
+    if m:
+        cand = m.group(1).strip()
+        for o in opts:
+            if _norm(cand) == _norm(o):
+                return o
+        if cand in opts:
+            return cand
+    for o in opts:
+        if _norm(o) and _norm(o) in na:
+            return o
+    return None
 
 QUESTION_BANK = {
     'bio': {
@@ -256,7 +292,7 @@ def ai_generate(count, topics):
 1. 每題一條完整選擇題（問題 + 4 個選項 A-D），正式書面語、繁體中文（學校測驗卷風格）
 2. 4 個選項：1 個正確答案 + 3 個干擾選項，全部必須符合「教材知識點」範圍
 3. 干擾選項要「似層層」：用教材入面容易混淆嘅概念（例如兩棲類 vs 爬行類、保護色 vs 偽裝、儲脂肪 vs 儲水）
-4. 正確答案必須同教材知識點完全一致
+4. 「answer」欄必須同「options」入面正確嗰個選項**字面完全一樣**（原字照寫，唔准加 A/B/C/D 前綴、唔准加括號、唔准寫多餘字），且答案內容必須同教材知識點完全一致
 5. 唔好出超過教材範圍嘅題目
 6. 每題附 hint：用書面語解釋點解揀呢個答案（引用教材知識點）
 
@@ -267,7 +303,7 @@ def ai_generate(count, topics):
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"請根據教材知識點生成 {count} 條常識選擇題（4 個選項、附 hint）。"},
+            {"role": "user", "content": f"請根據教材知識點生成 {count} 條常識選擇題（4 個選項、附 hint；answer 必須原字照寫 options 入面正確嗰個選項，唔准加 A/B/C/D 前綴）。"},
         ],
         "max_tokens": 6000,
         "temperature": 0.8,
@@ -296,9 +332,10 @@ def ai_generate(count, topics):
         if not q or not isinstance(opts, list) or len(opts) != 4:
             continue
         clean_opts = [o.strip() for o in opts]
-        if ans not in clean_opts:
+        matched = _match_answer(ans, clean_opts)
+        if matched is None:
             continue
-        valid.append({"q": q, "options": clean_opts, "answer": ans, "hint": hint})
+        valid.append({"q": q, "options": clean_opts, "answer": matched, "hint": hint})
     if not valid:
         st.error("❌ AI 生成嘅題目全部唔合格（答案唔喺選項入面）— 再試一次？")
     return valid[:count]
