@@ -236,7 +236,7 @@ def label_for(k, mode_is_ai):
 def ai_generate(count, topics):
     api_base, api_key, model = get_api_config()
     if not api_key:
-        st.error("⚠️ 未偵測到 API key — 請喺 Streamlit Cloud Secrets 設定 OPENAI_API_KEY（或本地 .streamlit/secrets.toml）")
+        st.error("⚠️ 未偵測到 API key — 請去 app 右上 ⋯ → Settings → Secrets 設定（OPENAI_API_KEY）")
         return []
     ctx_lines, pt_lines = [], []
     for t in topics:
@@ -304,8 +304,10 @@ def ai_generate(count, topics):
     return valid[:count]
 
 def build_round(mode_is_ai, topics, count):
+    """生成一輪題目；成功回 True，失敗（例如 AI 出錯）回 False — 失敗時唔 rerun，等錯誤訊息留喺畫面"""
     if mode_is_ai:
-        qs = ai_generate(count, topics)
+        with st.spinner("✨ AI 生成緊題目，請稍候…（約 10–30 秒）"):
+            qs = ai_generate(count, topics)
     else:
         pool = [q for t in topics for q in QUESTION_BANK[t]["questions"]]
         random.shuffle(pool)
@@ -314,8 +316,11 @@ def build_round(mode_is_ai, topics, count):
             opts = list(choices)
             random.shuffle(opts)
             qs.append({"q": q, "options": opts, "answer": ans, "hint": hint})
+    if not qs:
+        return False
     st.session_state.gs_questions = qs
     st.session_state.gs_checked = False
+    return True
 
 # ===== Sidebar =====
 with st.sidebar:
@@ -333,8 +338,11 @@ with st.sidebar:
         if not topics:
             st.warning("⚠️ 請先揀至少一個主題")
         else:
-            build_round(mode_is_ai, topics, count)
-            st.rerun()
+            try:
+                if build_round(mode_is_ai, topics, count):
+                    st.rerun()
+            except Exception as e:
+                st.error(f"❌ 出錯：{e}")
     if topics:
         with st.expander("📚 知識點"):
             if mode_is_ai:
@@ -386,5 +394,8 @@ if c2.button("🔄 再嚟一輪", use_container_width=True):
     topics = st.session_state.gs_topics
     count = st.session_state.gs_count
     if topics:
-        build_round(mode_is_ai, topics, count)
-        st.rerun()
+        try:
+            if build_round(mode_is_ai, topics, count):
+                st.rerun()
+        except Exception as e:
+            st.error(f"❌ 出錯：{e}")
