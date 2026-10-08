@@ -126,6 +126,7 @@ def _match_answer(ans, opts):
 QUESTION_BANK = {
     'bio': {
         'name': '生物的分類（動物分類・特殊案例・植物分類）',
+        'date': '2026-09-13',
         "questions": [
             ('青蛙的皮膚特徵是什麼？', ['濕潤無鱗', '乾燥有鱗片', '長有羽毛', '長有毛髮'], '濕潤無鱗', '兩棲類皮膚濕潤、無鱗片，用肺＋皮膚呼吸'),
             ('蛇的皮膚特徵是什麼？', ['乾燥有鱗片', '濕潤無鱗', '長有羽毛', '有毛髮'], '乾燥有鱗片', '爬行類皮膚乾燥、有鱗片，只用肺呼吸'),
@@ -156,6 +157,7 @@ QUESTION_BANK = {
     },
     'plant': {
         'name': '植物與環境（根莖葉適應・植物自我保護）',
+        'date': '2026-09-17',
         "questions": [
             ('影響植物生長嘅兩個主要因素係？', ['氣溫同雨量', '土壤同風', '陽光同動物', '海拔同緯度'], '氣溫同雨量', '不同地方嘅氣溫同雨量不同，會影響植物生長'),
             ('沙漠植物嘅根深入泥土中，作用係？', ['吸收地下深處嘅水分', '散熱', '抓緊地面', '吸收陽光'], '吸收地下深處嘅水分', '沙漠乾旱缺水，根要長得深先吸到地下水'),
@@ -179,6 +181,7 @@ QUESTION_BANK = {
     },
     'animal': {
         'name': '動物與環境（環境適應・保護・覓食）',
+        'date': '2026-09-24',
         "questions": [
             ('北極熊點解唔怕凍？', ['有厚脂肪＋濃密毛＋細小耳朵', '因為佢大隻', '因為佢白色', '因為佢跑得快'], '有厚脂肪＋濃密毛＋細小耳朵', '厚脂肪儲存能量兼保溫，濃密毛減少熱量散失，細耳減少散熱'),
             ('駱駝嘅駝峰儲咩？', ['脂肪', '水', '食物', '空氣'], '脂肪', '駝峰儲脂肪（唔係儲水），令駱駝耐食耐渴'),
@@ -270,7 +273,12 @@ def options_for_mode(mode_is_ai):
     return list(QUESTION_BANK.keys())
 
 def label_for(k, mode_is_ai):
-    return AI_TOPICS[k]["name"] if mode_is_ai else QUESTION_BANK[k]["name"]
+    if mode_is_ai:
+        return AI_TOPICS[k]["name"]
+    else:
+        data = QUESTION_BANK[k]
+        date = data.get('date', '')
+        return f"{data['name']} ({date})" if date else data['name"]
 
 def ai_generate(count, topics):
     api_base, api_key, model = get_api_config()
