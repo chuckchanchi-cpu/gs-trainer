@@ -33,6 +33,41 @@ def get_md_files():
 
 MD_FILES = get_md_files()
 
+# ===== 中文數字轉阿拉伯數字 =====
+CHINESE_NUMBERS = {
+    '零': 0, '一': 1, '壹': 1, '二': 2, '貳': 2, '兩': 2, '三': 3, '叁': 3,
+    '四': 4, '肆': 4, '五': 5, '伍': 5, '六': 6, '陸': 6, '七': 7, '柒': 7,
+    '八': 8, '捌': 8, '九': 9, '玖': 9, '十': 10, '拾': 10,
+    '廿': 20, '卅': 30, '卌': 40
+}
+
+def chinese_to_number(text):
+    """將中文數字轉換為阿拉伯數字"""
+    text = text.strip()
+    if text in CHINESE_NUMBERS:
+        return str(CHINESE_NUMBERS[text])
+    
+    # 處理複合數字如 "十一", "十二"
+    result = 0
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if char in CHINESE_NUMBERS:
+            num = CHINESE_NUMBERS[char]
+            if num == 10 and i + 1 < len(text) and text[i+1] in CHINESE_NUMBERS:
+                next_num = CHINESE_NUMBERS[text[i+1]]
+                if next_num <= 10:
+                    result += 10 + next_num
+                    i += 2
+                    continue
+            elif num == 10:
+                result += 10
+            else:
+                result += num
+        i += 1
+    
+    return str(result) if result > 0 else text
+
 # ===== 解析 Markdown 題目 =====
 def parse_questions_from_md(filepath):
     """從 Markdown 文件提取問答對"""
@@ -41,9 +76,12 @@ def parse_questions_from_md(filepath):
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
         
-        # 檢測單元名稱
-        unit_match = re.search(r'(?:單元|Unit)\s*(\d+)', content)
-        unit_num = unit_match.group(1) if unit_match else "?"
+        # 檢測單元名稱（支持中英文數字）
+        unit_match = re.search(r'(?:單元|Unit)\s*([一二三四五六七八九十\d]+)', content)
+        unit_num = "?"
+        if unit_match:
+            raw_num = unit_match.group(1)
+            unit_num = chinese_to_number(raw_num)
         
         lines = content.split('\n')
         current_q = ""
@@ -102,10 +140,6 @@ def parse_questions_from_md(filepath):
                         if clean and len(clean) < 50:
                             answer = clean
             
-            # 檢測小總結中的答案
-            elif stripped.startswith('**小總結：**'):
-                pass  # 跳過標題
-            
             # 檢測定義式答案
             elif re.match(r'^→\s*.*$', stripped):
                 ans_part = stripped.split('→')[1].strip().lstrip('*').rstrip('*')
@@ -141,9 +175,12 @@ if MD_FILES:
         try:
             with open(md_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            unit_match = re.search(r'(?:單元|Unit)\s*(\d+)\s*[：:]\s*(.+?)(?:\n|$)', content)
+            unit_match = re.search(r'(?:單元|Unit)\s*([一二三四五六七八九十\d]+)\s*[：:]\s*(.+?)(?:\n|$)', content)
             if unit_match:
-                unit_names[unit_match.group(1)] = unit_match.group(2).strip()
+                raw_num = unit_match.group(1)
+                unit_num = chinese_to_number(raw_num)
+                unit_name = unit_match.group(2).strip()
+                unit_names[unit_num] = unit_name
         except:
             pass
     
