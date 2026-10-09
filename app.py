@@ -9,11 +9,7 @@ Chuck 要求（2026-10-09）：
   - 自動提取題目和答案
   - 提供 MCQ 訓練模式
 
-題庫來源：General_Studies/ 下的所有 .md 文件
-  - Unit_1_BiologicalClassification_Chinese.md
-  - Unit_2_Plants_and_Environment_20260917.md
-  - Unit_3_Animals_and_Environment_20260924.md
-  - 2026-10-09_常識_生物的相互關係與生態平衡.md
+題庫來源：本目錄下的所有 .md 文件（已內嵌於倉庫）
 """
 
 import os
@@ -25,25 +21,17 @@ import streamlit as st
 st.set_page_config(page_title="❓ 常識選擇題生成器", page_icon="❓", layout="wide")
 
 # ===== 教材路徑 =====
-def material_dir():
-    """從工作目錄尋找 General_Studies 資料夾"""
-    base = os.path.dirname(os.path.abspath(__file__))
-    paths = [
-        os.path.join(base, "General_Studies"),
-        os.path.join(base, "..", "openedujustan", "General_Studies"),
-        os.path.join("/home/fring1117/.openclaw/workspace/openedujustan", "General_Studies"),
-    ]
-    for p in paths:
-        if os.path.isdir(p):
-            return os.path.normpath(p)
-    return None
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-MAT_DIR = material_dir()
+def get_md_files():
+    """獲取本目錄下所有 .md 文件（排除 README.md）"""
+    files = []
+    for f in os.listdir(BASE_DIR):
+        if f.endswith(".md") and not f.startswith(".") and f != "README.md":
+            files.append(os.path.join(BASE_DIR, f))
+    return sorted(files)
 
-if MAT_DIR:
-    md_files = sorted([f for f in os.listdir(MAT_DIR) if f.endswith(".md") and not f.startswith(".")])
-else:
-    md_files = []
+MD_FILES = get_md_files()
 
 # ===== 解析 Markdown 題目 =====
 def parse_questions_from_md(filepath):
@@ -57,21 +45,19 @@ def parse_questions_from_md(filepath):
         unit_match = re.search(r'(?:單元|Unit)\s*(\d+)', content)
         unit_num = unit_match.group(1) if unit_match else "?"
         
-        # 提取問題和答案的模式
-        # 模式1: 題目 + 選項 A-D + 答案標記
-        # 模式2: 填空題 → **答案** ✅
-        # 模式3: 判斷題 ✓/✗
-        
         lines = content.split('\n')
         current_q = ""
         options = []
         answer = ""
+        q_number = None
         
         for line in lines:
-            line = line.strip()
+            stripped = line.strip()
             
-            # 檢測問題行
-            if re.match(r'^\d+\.', line) or (line.startswith('**') and '?' in line):
+            # 檢測問題行（數字開頭 + 標點）
+            q_match = re.match(r'^(\d+)\.\s+(.+)$', stripped)
+            if q_match:
+                # 保存上一個問題
                 if current_q and answer:
                     questions.append({
                         "unit": unit_num,
@@ -80,27 +66,51 @@ def parse_questions_from_md(filepath):
                         "answer": answer,
                         "hint": ""
                     })
-                current_q = line.replace('**', '').replace('?', '').strip()
+                q_number = int(q_match.group(1))
+                current_q = q_match.group(2).replace('**', '').strip()
                 options = []
                 answer = ""
             
-            # 檢測選項
-            elif re.match(r'^[A-Da-d][.、)]', line):
-                options.append(line[2:].strip())
+            # 檢測選項 [A-D]
+            elif re.match(r'^[A-Da-d][.、)]\s*', stripped):
+                opt_text = re.sub(r'^[A-Da-d][.、)]\s*', '', stripped)
+                if opt_text:
+                    options.append(opt_text)
             
-            # 檢測答案
-            elif '**' in line and ('✅' in line or '✓' in line):
-                answer_match = re.search(r'\*\*(.+?)\*\*', line)
-                if answer_match:
-                    answer = answer_match.group(1)
+            # 檢測答案標記 **答案** ✅
+            elif '**✅' in stripped or '✅ **' in stripped:
+                ans_match = re.search(r'\*\*(.+?)\*\*', stripped)
+                if ans_match:
+                    answer = ans_match.group(1)
             
-            # 檢測填空答案
-            elif '→ **' in line:
-                answer = line.split('→ **')[1].split('**')[0]
+            # 檢測填空答案 → **答案**
+            elif '→ **' in stripped:
+                answer = stripped.split('→ **')[1].split('**')[0]
             
-            # 檢測判斷題答案
-            elif '→ ✗' in line or '→ ✓' in line:
-                answer = '✓' if '✓' in line else '✗'
+            # 檢測判斷題 ✓/✗
+            elif '→ ✗' in stripped:
+                answer = '✗'
+            elif '→ ✓' in stripped:
+                answer = '✓'
+            
+            # 檢測表格中的答案欄位
+            elif stripped.startswith('|') and ('✅' in stripped or '✓' in stripped):
+                cells = [c.strip() for c in stripped.split('|') if c.strip()]
+                for cell in cells:
+                    if '✅' in cell or '✓' in cell:
+                        clean = cell.replace('✅', '').replace('✓', '').strip()
+                        if clean and len(clean) < 50:
+                            answer = clean
+            
+            # 檢測小總結中的答案
+            elif stripped.startswith('**小總結：**'):
+                pass  # 跳過標題
+            
+            # 檢測定義式答案
+            elif re.match(r'^→\s*.*$', stripped):
+                ans_part = stripped.split('→')[1].strip().lstrip('*').rstrip('*')
+                if ans_part and len(ans_part) < 50:
+                    answer = ans_part
         
         # 添加最後一個問題
         if current_q and answer:
@@ -113,7 +123,7 @@ def parse_questions_from_md(filepath):
             })
     
     except Exception as e:
-        st.error(f"❌ 讀取文件失敗：{e}")
+        st.error(f"❌ 讀取文件失敗：{filepath} — {e}")
     
     return questions
 
@@ -121,22 +131,37 @@ def parse_questions_from_md(filepath):
 all_questions = []
 unit_names = {}
 
-if MAT_DIR:
-    for md_file in md_files:
-        filepath = os.path.join(MAT_DIR, md_file)
-        questions = parse_questions_from_md(filepath)
+if MD_FILES:
+    for md_file in MD_FILES:
+        filename = os.path.basename(md_file)
+        questions = parse_questions_from_md(md_file)
         all_questions.extend(questions)
         
         # 提取單元名稱
-        unit_match = re.search(r'(?:單元|Unit)\s*(\d+)\s*[：:]\s*(.+?)(?:\n|$)', open(filepath, 'r', encoding='utf-8').read())
-        if unit_match:
-            unit_names[unit_match.group(1)] = unit_match.group(2).strip()
+        try:
+            with open(md_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+            unit_match = re.search(r'(?:單元|Unit)\s*(\d+)\s*[：:]\s*(.+?)(?:\n|$)', content)
+            if unit_match:
+                unit_names[unit_match.group(1)] = unit_match.group(2).strip()
+        except:
+            pass
+    
+    # 去重：移除重複的問題（相同 question text）
+    seen = set()
+    unique_questions = []
+    for q in all_questions:
+        key = (q["unit"], q["question"])
+        if key not in seen:
+            seen.add(key)
+            unique_questions.append(q)
+    all_questions = unique_questions
 else:
-    st.warning("⚠️ 未找到 General_Studies 資料夾！")
+    st.warning("⚠️ 未找到任何 .md 文件！")
 
 # ===== 頁面 =====
 st.title("❓ 常識選擇題生成器")
-st.caption("小六常識科 MCQ 訓練 — 揀主題 → 每輪出題 → 即場作答自動批改。題目 100% 嚟自教材！")
+st.caption("小六常識科 MCQ 訓練 — 揀單元 → 每輪出題 → 即場作答自動批改。題目 100% 嚟自教材！")
 
 if "gs_questions" not in st.session_state:
     st.session_state.gs_questions = []
@@ -149,7 +174,7 @@ with st.sidebar:
     
     if all_questions:
         units = sorted(set(q["unit"] for q in all_questions))
-        unit_options = [u for u in units]
+        unit_options = units
         
         selected_units = st.multiselect(
             "揀單元（可多選）",
@@ -176,12 +201,13 @@ with st.sidebar:
         
         with st.expander("📚 題庫資訊"):
             st.markdown(f"**總題目數：** {len(all_questions)}")
+            st.markdown(f"**文件數量：** {len(MD_FILES)}")
             for u in units:
                 name = unit_names.get(u, "")
                 count_u = sum(1 for q in all_questions if q["unit"] == u)
                 st.markdown(f"- Unit {u}: {name} ({count_u} 題)")
     else:
-        st.warning("⚠️ 未找到任何題目！請檢查 General_Studies 資料夾。")
+        st.warning("⚠️ 未找到任何題目！")
 
 st.divider()
 
