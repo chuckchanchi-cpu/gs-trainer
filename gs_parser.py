@@ -69,7 +69,9 @@ def parse_answer_section(content):
     return ans
 
 def _clean(s):
-    return re.sub(r'[✅❌]\s*$','',s).strip().rstrip('*').strip()
+    # 去掉 ✅❌ 標記 + markdown 粗體 **，令選項同答案字面一致（批改先啱）
+    s = re.sub(r'[✅❌]\s*$', '', s).replace('**', '')
+    return s.strip().rstrip('*').strip()
 
 def extract_mcq(content):
     """選擇題：### N. q + - A/B/C/D + ✅/❌ + 解釋"""
@@ -204,7 +206,14 @@ def normalize(qs, unit, topic, filename):
         elif t == 'true_false':
             opts = ['正確（✓）','錯誤（✗）']
             a = (q['answer'] or '').strip()
-            ans = '正確（✓）' if a.startswith('✓') else ('錯誤（✗）' if a.startswith('✗') else None)
+            if a.startswith(('✓', '正確', '對', 'O', '○')):
+                ans = '正確（✓）'
+            elif a.startswith(('✗', 'X', 'x', '錯誤', '錯')):
+                ans = '錯誤（✗）'
+            else:
+                ans = None
+            if ans is None:
+                continue  # 答案解析唔到 → 題目作廢，唔好出一條永遠判錯嘅題
         elif t == 'fill_blank':
             ans = q['answer']
             if not ans: continue
@@ -224,6 +233,8 @@ def normalize(qs, unit, topic, filename):
             opts = [ans] + [c for c in all_cats if c != ans][:3]
         else:
             continue  # short_answer 不進 MCQ 題庫
+        if not ans:
+            continue
         if ans not in opts:
             opts = [ans] + opts[:3]
         out.append({

@@ -5,7 +5,7 @@
 流程：讀 repo 內最新教材(.md) → 解析主題/題目 → 揀主題出題 → 批改（教材原題）／AI 生成新題
 AI（qwen3.8-flash）設定來自 Streamlit Secrets：OPENAI_API_KEY / SILRA_API_URL / MODEL_NAME
 """
-import os, json, random, re
+import os, json, random, re, unicodedata
 import streamlit as st
 import gs_parser
 
@@ -62,7 +62,8 @@ def _silra_chat(messages, max_tokens=2048):
     try:
         r = requests.post(url,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": messages, "max_tokens": max_tokens}, timeout=90)
+            json={"model": model, "messages": messages, "max_tokens": max_tokens,
+                  "enable_thinking": False}, timeout=90)
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
@@ -74,32 +75,103 @@ def _topic_material(topic):
     parts += [q["question"] + " → " + q["answer"] for q in all_questions if q["topic"] == topic]
     return "\n\n".join(parts)
 
+def _norm(s):
+    """正規化文字：全形→半形、刪空白同括號引號，用嚟做寬鬆比對"""
+    s = unicodedata.normalize("NFKC", s or "")
+    return re.sub(r"[\s「」『』\"'“”’（）()]+", "", s)
+
+
+def _match_answer(ans, opts):
+    """AI 嘅 answer 可能加咗 A/B/C/D 前綴、寫多咗字 — 嚴格地解析返去原選項字面。
+    解析唔到就回傳 None（題目作廢），絕不亂配，避免批改錯判。"""
+    if not ans:
+        return None
+    ans = str(ans).strip()
+    if ans in opts:
+        return ans
+    na = _norm(ans)
+    if not na:
+        return None
+    for o in opts:
+        if _norm(o) == na:
+            return o
+    m = re.fullmatch(r"[a-dA-D]", na)
+    if m:
+        idx = ord(m.group(0).upper()) - ord("A")
+        if idx < len(opts):
+            return opts[idx]
+    m = re.match(r"^[a-dA-D][.、)）:：]\s*(.+)$", ans)
+    if m:
+        cand = m.group(1).strip()
+        for o in opts:
+            if _norm(cand) == _norm(o):
+                return o
+        if cand in opts:
+            return cand
+    # 唯一包含匹配（qwen 成日寫多字）；多過一個選項命中 → 視為模糊，作廢
+    hits = [o for o in opts if _norm(o) and _norm(o) in na]
+    if len(hits) == 1:
+        return hits[0]
+    return None
+
+
+def _extract_json_array(text):
+    """穩陣抽取 JSON 陣列：去 code fence → raw_decode → 修復 trailing comma／全形逗號再試"""
+    if not text:
+        return None
+    t = text.strip()
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", t)
+    if m:
+        t = m.group(1).strip()
+    dec = json.JSONDecoder()
+    for cand in (t, re.sub(r",\s*([\]}])", r"\1", t.replace("，", ",").replace("、", ","))):
+        idx = cand.find("[")
+        while idx != -1:
+            try:
+                arr, _ = dec.raw_decode(cand, idx)
+                if isinstance(arr, list):
+                    return arr
+            except json.JSONDecodeError:
+                pass
+            idx = cand.find("[", idx + 1)
+    return None
+
+
 def generate_ai_questions(topic, count):
     mat = _topic_material(topic)
     prompt = (
         f"你是小六常識科出題老師。根據以下教材知識點，生成 {count} 條選擇題。"
         f"每題必須：4 個選項、1 個正確答案、1 句書面語解釋。只准用教材知識點，唔可以作新事實。"
-        f"只輸出 JSON 陣列：[{{\"question\":\"...\",\"options\":[\"A\",\"B\",\"C\",\"D\"],\"answer\":\"正確選項\",\"explanation\":\"...\"}}]\n\n教材：\n{mat[:4000]}"
+        f"\n\n鐵律：\n"
+        f"1.「answer」必須同其中一個「options」字面完全一樣（原字照抄），唔准加 A/B/C/D 前綴、唔准加括號或多餘字。\n"
+        f"2. 嚴格只輸出 JSON 陣列：唔好加 markdown、註解、尾隨逗號；每一行都要係合法 JSON。\n"
+        f"3. 每個字都要喺 JSON 字串入面，唔好中途斷行破壞結構。\n\n"
+        f"格式：[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"answer\":\"正確選項原字\",\"explanation\":\"...\"}}]\n\n教材：\n{mat[:4000]}"
     )
-    out = _silra_chat([{"role": "user", "content": prompt}])
-    if not out: return []
-    m = re.search(r'\[.*\]', out, re.S)
-    try:
-        arr = json.loads(m.group(0) if m else out)
-        qs = []
-        for item in arr:
-            opts = item.get("options", [])
-            ans = item.get("answer", "")
-            if item.get("question") and len(opts) >= 2 and ans:
-                qs.append({"unit": None, "topic": topic, "file": "AI", "type": "ai",
-                           "question": item["question"], "options": opts, "answer": ans,
-                           "answer_index": opts.index(ans) if ans in opts else 0,
-                           "explanation": item.get("explanation", "")})
-        return qs
-    except Exception as e:
-        st.error(f"⚠️ AI 回傳格式無法解析：{e}")
-        st.code(out)
+    out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=8000)
+    if not out:
         return []
+    arr = _extract_json_array(out)
+    if not isinstance(arr, list):
+        st.error("⚠️ AI 回傳格式無法解析 — 試多一次？（如果經常出現，可減少每輪題數）")
+        st.code(out[:3000])
+        return []
+    qs = []
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        qtext = (item.get("question") or "").strip()
+        opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
+        if not qtext or len(opts) < 2:
+            continue
+        matched = _match_answer(item.get("answer", ""), opts)
+        if matched is None:
+            continue  # 答案對唔返選項 → 題目作廢（嚴格，避免批改錯判）
+        qs.append({"unit": None, "topic": topic, "file": "AI", "type": "ai",
+                   "question": qtext, "options": opts, "answer": matched,
+                   "answer_index": opts.index(matched),
+                   "explanation": (item.get("explanation") or "").strip()})
+    return qs[:count]
 
 def explain_answer(q, user_answer):
     if q.get("explanation"): return q["explanation"]
@@ -123,6 +195,14 @@ st.caption("小六常識科 MCQ 訓練 — 揀主題 → 每輪出題 → 即場
 if "gs_questions" not in st.session_state: st.session_state.gs_questions = []
 if "gs_checked" not in st.session_state: st.session_state.gs_checked = False
 
+def set_round(qs):
+    """換新一輪題目：清走上一輪嘅作答狀態（gs_a0/gs_a1/...），避免殘留答案影響批改"""
+    for k in list(st.session_state.keys()):
+        if re.fullmatch(r"gs_a\d+", str(k)):
+            del st.session_state[k]
+    st.session_state.gs_questions = qs
+    st.session_state.gs_checked = False
+
 with st.sidebar:
     st.header("⚙️ 設定")
     if st.button("🔄 從 GitHub 更新教材", use_container_width=True):
@@ -130,8 +210,7 @@ with st.sidebar:
         if fresh:
             parse_all.clear()
             data = parse_all(fresh)
-            st.session_state.gs_questions = []
-            st.session_state.gs_checked = False
+            set_round([])
             st.rerun()
     if all_questions:
         topic_labels = [build_topic_label(u, t) for t, u in topic_items]
@@ -146,15 +225,15 @@ with st.sidebar:
             else:
                 chosen_topics = [label_to_topic[x] for x in selected]
                 if mode.startswith("✨"):
-                    pool = []
-                    for t in chosen_topics: pool += generate_ai_questions(t, count)
+                    with st.spinner("✨ AI 生成緊題目，請稍候…"):
+                        pool = []
+                        for t in chosen_topics: pool += generate_ai_questions(t, count)
                     qs = pool[:count]
                 else:
                     pool = [q for q in all_questions if q["topic"] in chosen_topics]
                     random.shuffle(pool); qs = pool[:count]
                 if qs:
-                    st.session_state.gs_questions = qs
-                    st.session_state.gs_checked = False
+                    set_round(qs)
                     st.rerun()
                 else:
                     st.error("❌ 冇題目！請檢查 AI 設定或所選主題。")
@@ -193,7 +272,8 @@ else:
     results = []
     for i, q in enumerate(qs):
         user = st.session_state.get(f"gs_a{i}")
-        results.append((i, user, user == q["answer"]))
+        ok = user is not None and _norm(user) == _norm(q["answer"])
+        results.append((i, user, ok))
     correct = sum(1 for _, _, ok in results if ok)
     st.metric("🏆 得分", f"{correct} / {len(qs)}")
     for i, user, ok in results:
@@ -210,11 +290,19 @@ if c2.button("🔄 再嚟一輪", use_container_width=True):
     if st.session_state.get("gs_topics"):
         label_to_topic = {build_topic_label(u, t): t for t, u in topic_items}
         chosen_topics = [label_to_topic[x] for x in st.session_state.gs_topics]
-        pool = [q for q in all_questions if q["topic"] in chosen_topics]
-        random.shuffle(pool)
-        qs = pool[:st.session_state.gs_count]
-        if qs:
-            st.session_state.gs_questions = qs
-            st.session_state.gs_checked = False
+        cnt = st.session_state.gs_count
+        if st.session_state.get("gs_mode", "").startswith("✨"):
+            with st.spinner("✨ AI 生成緊題目，請稍候…"):
+                pool = []
+                for t in chosen_topics: pool += generate_ai_questions(t, cnt)
+            qs2 = pool[:cnt]
+        else:
+            pool = [q for q in all_questions if q["topic"] in chosen_topics]
+            random.shuffle(pool)
+            qs2 = pool[:cnt]
+        if qs2:
+            set_round(qs2)
             st.rerun()
+        else:
+            st.error("❌ 冇題目！請檢查 AI 設定或所選主題。")
 
