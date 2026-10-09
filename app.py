@@ -452,3 +452,4 @@ if c2.button("🔄 再嚟一輪", use_container_width=True):
                 st.rerun()
         except Exception as e:
             st.error(f"❌ 出錯：{e}")
+# Updated at Fri Oct  9 10:51:58 CST 2026
