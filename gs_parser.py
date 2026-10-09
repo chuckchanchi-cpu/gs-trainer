@@ -262,3 +262,23 @@ def load_all(base_dir):
             knowledge.append({'unit':r['unit'],'topic':r['topic'],'content':r['knowledge'],'file':os.path.basename(f)})
     return {'topics':topics,'questions':questions,'knowledge':knowledge}
 
+# ============ 直接執行時的提示 ============
+# gs_parser.py 是「解析模組」，由 app.py 匯入使用，不是 Streamlit app。
+# 若有人誤用 streamlit run gs_parser.py，會顯示以下提示（避免黑畫面）。
+if __name__ == "__main__":
+    try:
+        import streamlit as _st
+        if _st.runtime.exists():
+            _st.set_page_config(page_title="gs_parser（模組）")
+            _st.title("⚠️ gs_parser.py 是解析模組，不是 Streamlit app")
+            _st.info("Streamlit Cloud 的 main file 請設為 app.py；本地請執行 streamlit run app.py。")
+            _st.code("streamlit run app.py", language="bash")
+            _st.stop()
+    except Exception:
+        pass
+    import glob as _g
+    _base = os.path.dirname(os.path.abspath(__file__))
+    _files = [f for f in _g.glob(os.path.join(_base, "*.md")) if "README" not in os.path.basename(f)]
+    for _f in sorted(_files):
+        _r = parse_file(_f)
+        print("U%s [%s] %s -> %d 題" % (_r["unit"], _r["topic"], os.path.basename(_f), len(_r["questions"])))
