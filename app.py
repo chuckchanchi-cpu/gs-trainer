@@ -145,7 +145,12 @@ def generate_ai_questions(topic, count):
         f"\n\n鐵律：\n"
         f"1.「answer」必須同其中一個「options」字面完全一樣（原字照抄），唔准加 A/B/C/D 前綴、唔准加括號或多餘字。\n"
         f"2. 嚴格只輸出 JSON 陣列：唔好加 markdown、註解、尾隨逗號；每一行都要係合法 JSON。\n"
-        f"3. 每個字都要喺 JSON 字串入面，唔好中途斷行破壞結構。\n\n"
+        f"3. 每個字都要喺 JSON 字串入面，唔好中途斷行破壞結構。\n"
+        f"4. **每題必須係獨立知識題**：淨係考知識點本身，學生唔使閱讀任何額外資料就答到。\n"
+        f"5. **嚴禁資料題**：唔准喺題目入面引用／貼上任何資料段落、短文、圖表；唔准用「根據以下資料／閱讀下列短文／下文／上文」等字眼；唔准叫學生對照資料作答。\n"
+        f"6. 題目風格同教材原題一致，一題考一個知識點，直接問概念、特徵、例子、原因。\n"
+        f"   ✅ 好例子：「紅樹林嘅根點解要伸出泥土？」「下列哪種動物屬於兩棲類？」\n"
+        f"   ❌ 壞例子：「根據以下資料，回答第 8-11 題：……（貼段落）」\n\n"
         f"格式：[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"answer\":\"正確選項原字\",\"explanation\":\"...\"}}]\n\n教材：\n{mat[:4000]}"
     )
     out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=8000)
@@ -157,6 +162,8 @@ def generate_ai_questions(topic, count):
         st.code(out[:3000])
         return []
     qs = []
+    # 資料題／貼咗段落嘅題目一律作廢 — 訓練目標係知識點，唔係睇資料搵答案
+    data_q_re = re.compile(r"根據(以下|下列|資料|這|该|短文|文章)|閱讀(以下|下列|資料)|下文|上文|資料顯示|以下資料|下列資料|短文中|文章中|段落中|看資料|原文")
     for item in arr:
         if not isinstance(item, dict):
             continue
@@ -164,6 +171,8 @@ def generate_ai_questions(topic, count):
         opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
         if not qtext or len(opts) < 2:
             continue
+        if data_q_re.search(qtext) or len(qtext) > 120:
+            continue  # 資料題 / 引用段落 → 作廢
         matched = _match_answer(item.get("answer", ""), opts)
         if matched is None:
             continue  # 答案對唔返選項 → 題目作廢（嚴格，避免批改錯判）
