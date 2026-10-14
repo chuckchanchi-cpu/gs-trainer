@@ -29,9 +29,9 @@ def detect_unit_topic(content, filename):
             title = L.lstrip('#').strip(); break
     RULES = [
         (['生態','平衡','相互關係'], '4', '大自然的平衡'),
-        (['生物的分類','生物分類','生物多樣性'], '1', '生物的分類'),
         (['植物'], '2', '植物與環境'),
         (['動物'], '3', '動物與環境'),
+        (['生物的分類','生物分類','生物多樣性'], '1', '生物的分類'),
     ]
     unit = None; topic = ''
     for kws, u, t in RULES:
