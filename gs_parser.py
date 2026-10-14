@@ -246,12 +246,141 @@ def normalize(qs, unit, topic, filename):
         })
     return out
 
+
+
+def _clean_cell(s):
+    s = str(s)
+    s = re.sub(r'[✅❌⚠️]', '', s)
+    s = s.replace('**', '')
+    s = re.sub(r'^[①②③④⑤⑥⑦⑧⑨⑩]\s*', '', s)
+    return s.strip()
+
+def _cell_ok(s):
+    if not s:
+        return False
+    if re.fullmatch(r'\d+', s):
+        return False
+    if re.fullmatch(r'[A-Za-z]', s):
+        return False
+    if re.search(r'[├└│─]', s):
+        return False
+    return True
+
+def _header_is_marker(h):
+    h = h.strip().replace('**', '')
+    return any(k in h for k in ('答案', '題號', '圖號', '編號', '序號', '圖片', '圖示', '代表圖'))
+
+def _make_table_question(subject, header):
+    h = header
+    subj = subject
+    if '保護' in h:
+        return f'「{subj}」用什麼方法保護自己？'
+    if '類別' in h or '分類' in h or '種類' in h:
+        return f'「{subj}」屬於哪一類？'
+    return f'「{subj}」的{h}是？'
+
+def extract_tables(content):
+    """由 markdown 表格自動生成 MCQ。只做可靠抽取：主體唯一、答案非標記、去重。"""
+    lines = content.split('\n')
+    qs = []
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith('|'):
+            i += 1
+            continue
+        block = []
+        while i < len(lines) and lines[i].strip().startswith('|'):
+            block.append(lines[i])
+            i += 1
+        rows = []
+        for bl in block:
+            cells = [c.strip() for c in bl.strip().strip('|').split('|')]
+            rows.append(cells)
+        if len(rows) < 3:
+            continue
+        header = rows[0]
+        data_rows = []
+        for r in rows[1:]:
+            if all(re.fullmatch(r'-{2,}:?', c) or c == '' for c in r):
+                continue
+            data_rows.append(r)
+        if len(data_rows) < 2:
+            continue
+        ncol = len(header)
+        col_marker = [False] * ncol
+        for c in range(ncol):
+            h = header[c] if c < len(header) else ''
+            if _header_is_marker(h):
+                col_marker[c] = True
+                continue
+            cells = [r[c] if c < len(r) else '' for r in data_rows]
+            mark = sum(1 for x in cells if (not x) or re.fullmatch(r'[✅❌⚠️—\-–·•]+', x.strip()))
+            if mark >= len(cells) * 0.5:
+                col_marker[c] = True
+        subj_col = None
+        for c in range(ncol):
+            if not col_marker[c]:
+                subj_col = c
+                break
+        if subj_col is None:
+            continue
+        ans_cols = [c for c in range(ncol) if not col_marker[c] and c != subj_col]
+        for ac in ans_cols:
+            hdr = _clean_cell(header[ac]).split('（')[0].split('(')[0].strip()
+            if not hdr:
+                continue
+            pairs = []
+            for r in data_rows:
+                subj_raw = r[subj_col] if subj_col < len(r) else ''
+                val_raw = r[ac] if ac < len(r) else ''
+                subj = _clean_cell(subj_raw)
+                val = _clean_cell(val_raw)
+                if not _cell_ok(subj) or not _cell_ok(val):
+                    continue
+                if '⚠️' in subj_raw or '⚠️' in val_raw:
+                    continue
+                if len(val) > 50:
+                    continue
+                if subj == val:
+                    continue
+                pairs.append((subj, val))
+            # 主體唯一性：同欄中主體只出現一次，避免「同主體多答案」歧義
+            cnt = {}
+            for s2, _ in pairs:
+                cnt[s2] = cnt.get(s2, 0) + 1
+            pairs = [(s2, v) for s2, v in pairs if cnt.get(s2, 0) == 1]
+            for subj, ans in pairs:
+                others = []
+                seen = set()
+                for s2, v in pairs:
+                    if v != ans and v not in seen:
+                        seen.add(v)
+                        others.append(v)
+                if len(others) < 2:
+                    continue
+                dist = others[:3]
+                opts = [ans] + dist
+                if len(set(opts)) != len(opts):
+                    continue
+                q = _make_table_question(subj, hdr)
+                qs.append({'type': 'mcq', 'question': q, 'options': opts, 'answer': ans, 'explanation': ''})
+    # 去重
+    seen = set()
+    uniq = []
+    for q in qs:
+        key = (q['question'], q['answer'])
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(q)
+    return uniq
+
 def parse_file(filepath):
     content = open(filepath, encoding='utf-8').read()
     filename = os.path.basename(filepath)
     unit, topic = detect_unit_topic(content, filename)
     answer_map = parse_answer_section(content)
-    raw = extract_mcq(content) + extract_numbered(content, answer_map) + extract_matching(content)
+    raw = extract_mcq(content) + extract_numbered(content, answer_map) + extract_matching(content) + extract_tables(content)
     # 給 matching 附上全部類別選項
     all_cats = sorted(set(q.get('category') for q in raw if q['type']=='matching' and q.get('category')))
     for q in raw:
