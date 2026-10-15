@@ -116,7 +116,7 @@ def _match_answer(ans, opts):
 
 
 def _short_match(user, ans):
-    """短答題模糊批改：標準化後相等，或答案核心詞命中過半。"""
+    """短答題批改：核心意思相同就算啱（唔使字句一模一樣）。先快速比對，再交 AI 判斷語意。"""
     if not user:
         return None
     nu = _norm(user)
@@ -125,11 +125,27 @@ def _short_match(user, ans):
         return None
     if nu == na:
         return True
-    keys = re.findall(r'[\u4e00-\u9fff]{2,}', na)
-    if not keys:
+    # 極短答案（如「肺和皮膚」）：只要核心詞包含就算啱
+    if len(na) <= 6 and na in nu:
+        return True
+    # 冇 AI key → 退返寬鬆關鍵詞命中
+    if not st.secrets.get("OPENAI_API_KEY", ""):
+        keys = re.findall(r'[\u4e00-\u9fff]{2,}', na)
+        if keys:
+            return sum(1 for k in keys if k in nu) / len(keys) >= 0.5
         return False
-    hit = sum(1 for k in keys if k in nu)
-    return hit / len(keys) >= 0.5
+    # AI 語意判斷：核心意思一致就啱，唔使字句一樣
+    prompt = (f"你是小六常識科批改老師。判斷學生短答嘅核心意思同參考答案係咪一致，"
+              f"唔使字句一模一樣，意思啱就得。\n"
+              f"參考答案：{ans}\n學生答案：{user}\n只回覆一個字：對 或 錯")
+    out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=10)
+    if out:
+        o = _norm(out).lower()
+        if "對" in o or "是" in o or "✓" in o or "啱" in o or "correct" in o or "yes" in o:
+            return True
+        if "錯" in o or "否" in o or "✗" in o or "wrong" in o or "no" in o:
+            return False
+    return False
 
 
 def _extract_json_array(text):
