@@ -355,8 +355,12 @@ else:
             st.caption("⚠️ 陷阱：" + q["trap"])
         if q.get("hint"):
             st.caption("🧭 分析：" + q["hint"])
-        expl = explain_answer(q, user)
-        if expl: st.caption("💡 " + expl)
+        if is_short:
+            # 短答：顯示評分準則（考試要寫到咩先得分）；唔使再叫 AI 解釋
+            st.caption("📝 評分準則：可用自己的文字作答，核心意思相同即得分；答案須涵蓋參考答案的關鍵要點。")
+        else:
+            expl = explain_answer(q, user)
+            if expl: st.caption("💡 " + expl)
     st.markdown("---")
 
 if c2.button("🔄 再嚟一輪", use_container_width=True):
