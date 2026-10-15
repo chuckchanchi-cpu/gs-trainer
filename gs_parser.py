@@ -417,12 +417,37 @@ def extract_tables(content):
         uniq.append(q)
     return uniq
 
+def extract_short_qa(content):
+    """由「重點溫習／家長提問」段落抽取短答題（「N. 問題？（答案）」格式）。"""
+    qs = []
+    m = re.search(r'#{1,4}\s*[^\n]*(?:重點溫習|家長提問)[^\n]*\n', content)
+    if not m:
+        return qs
+    section = content[m.end():]
+    nh = re.search(r'^#{1,4}\s', section, re.M)
+    if nh:
+        section = section[:nh.start()]
+    for line in section.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        mm = re.match(r'^(\d+)[.、]\s*(.+?)[？?。]\s*[（(]([^（）()]{2,80})[）)]\s*$', line)
+        if not mm:
+            continue
+        q = mm.group(2).strip()
+        ans = mm.group(3).strip()
+        ans = re.sub(r'^例如[：:]\s*', '', ans)  # 清走「例如：」前綴
+        if q and ans:
+            qs.append({'type': 'short_answer', 'question': q, 'answer': ans,
+                       'number': int(mm.group(1)), 'exercise': 'qa'})
+    return qs
+
 def parse_file(filepath):
     content = open(filepath, encoding='utf-8').read()
     filename = os.path.basename(filepath)
     unit, topic = detect_unit_topic(content, filename)
     answer_map = parse_answer_section(content)
-    raw = extract_mcq(content) + extract_numbered(content, answer_map) + extract_matching(content) + extract_tables(content)
+    raw = extract_mcq(content) + extract_numbered(content, answer_map) + extract_matching(content) + extract_tables(content) + extract_short_qa(content)
     # 給 matching 附上全部類別選項
     all_cats = sorted(set(q.get('category') for q in raw if q['type']=='matching' and q.get('category')))
     for q in raw:
