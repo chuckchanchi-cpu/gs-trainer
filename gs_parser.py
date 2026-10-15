@@ -191,9 +191,37 @@ def extract_knowledge(content, filename):
         return body
     return ''
 
+# 每主題嘅「分析提示」同「常見陷阱」（用於提示教學，教學生點分析）
+TOPIC_TIPS = {
+    '生物的分類': {
+        'hint': '分析三步：①睇身體表面（羽毛／鱗片／毛髮／外骨骼）②睇呼吸（肺／鰓／氣管）③睇繁殖（卵生／胎生）。',
+        'trap': '⚠️ 陷阱：企鵝有羽毛、卵生，屬鳥類；海豚用肺呼吸、餵母乳，屬哺乳類。唔好被「識唔識游水／飛」誤導。',
+    },
+    '植物與環境': {
+        'hint': '按環境配對特徵：沙漠→深入根＋肥厚莖＋刺狀葉；熱帶雨林→板狀根＋闊葉；濕地→呼吸根＋蠟質葉。',
+        'trap': '⚠️ 陷阱：蓮藕嘅洞孔係吸氧（唔係吸水）；仙人掌嘅刺係葉變形（減少水分流失），唔係莖。',
+    },
+    '動物與環境': {
+        'hint': '分三大保護法：保護色＝顏色似環境；偽裝＝形態似物體；警戒色＝鮮豔警告有毒。',
+        'trap': '⚠️ 陷阱：竹節蟲似樹枝＝偽裝；獅子金黃色似草原＝保護色。駝峰儲脂肪（唔係儲水）。',
+    },
+    '大自然的平衡': {
+        'hint': '食物鏈＝「吃」與「被吃」嘅關係，由植物（生產者）開始逐級向上；箭嘴指向「被吃」者。',
+        'trap': '⚠️ 陷阱：食物鏈方向要啱（植物→毛蟲→小鳥→鷹）；一種生物增減會連鎖影響其他生物。',
+    },
+}
+
+def _tip_for(topic):
+    t = TOPIC_TIPS.get(topic, {})
+    return t.get('hint', ''), t.get('trap', '')
+
+def _clean_ans(s):
+    return (s or '').replace('**', '').strip()
+
 def normalize(qs, unit, topic, filename):
-    """把題目正規化成 MCQ 形式（question + options + answer_index + explanation）"""
+    """把題目正規化成 MCQ／short 形式（question + options + answer + hint + trap + explanation）"""
     out = []
+    hint0, trap0 = _tip_for(topic)
     # 先收集各 exercise 的答案池（作 distractor 用）
     pool_by_ex = {}
     for q in qs:
@@ -231,8 +259,21 @@ def normalize(qs, unit, topic, filename):
             all_cats = q.get('_all_categories') or []
             if not all_cats: continue
             opts = [ans] + [c for c in all_cats if c != ans][:3]
+        elif t == 'short_answer':
+            ans = _clean_ans(q['answer'])
+            if not ans or len(ans) > 80:
+                continue
+            out.append({
+                'unit': unit, 'topic': topic, 'file': filename,
+                'type': 'short', 'question': q['question'],
+                'options': [], 'answer': ans,
+                'answer_index': 0,
+                'explanation': q.get('explanation',''),
+                'hint': q.get('hint') or hint0, 'trap': q.get('trap') or trap0,
+            })
+            continue
         else:
-            continue  # short_answer 不進 MCQ 題庫
+            continue
         if not ans:
             continue
         if ans not in opts:
@@ -243,6 +284,7 @@ def normalize(qs, unit, topic, filename):
             'options': opts, 'answer': ans,
             'answer_index': opts.index(ans) if ans in opts else 0,
             'explanation': q.get('explanation',''),
+            'hint': q.get('hint') or hint0, 'trap': q.get('trap') or trap0,
         })
     return out
 

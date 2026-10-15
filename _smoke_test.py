@@ -14,9 +14,11 @@ data = gs_parser.load_all(".")
 qs = data["questions"]
 print(f"✅ parser: {len(qs)} 題 / {len(data['topics'])} 主題")
 
-# 所有題目嘅 answer 必須喺 options 入面（批改正確性嘅前提）
-bad = [q for q in qs if q["answer"] not in q["options"]]
-print(f"✅ answer∈options: {len(qs)-len(bad)}/{len(qs)}" + (f" ❌ {len(bad)} 條有問題" if bad else ""))
+# 選擇題嘅 answer 必須喺 options 入面（批改正確性嘅前提）；短答題冇 options，跳過
+mcqs = [q for q in qs if q.get("type") != "short"]
+bad = [q for q in mcqs if q["answer"] not in q["options"]]
+print(f"✅ answer∈options: {len(mcqs)-len(bad)}/{len(mcqs)}（選擇題）" + (f" ❌ {len(bad)} 條有問題" if bad else ""))
+print(f"✅ 短答題: {len(qs)-len(mcqs)} 條")
 
 # ===== 複製 app.py 入面嘅 _norm/_match_answer/_extract_json_array 邏輯做測試 =====
 def _norm(s):

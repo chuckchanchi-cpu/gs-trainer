@@ -115,6 +115,23 @@ def _match_answer(ans, opts):
     return None
 
 
+def _short_match(user, ans):
+    """短答題模糊批改：標準化後相等，或答案核心詞命中過半。"""
+    if not user:
+        return None
+    nu = _norm(user)
+    na = _norm(ans)
+    if not nu:
+        return None
+    if nu == na:
+        return True
+    keys = re.findall(r'[\u4e00-\u9fff]{2,}', na)
+    if not keys:
+        return False
+    hit = sum(1 for k in keys if k in nu)
+    return hit / len(keys) >= 0.5
+
+
 def _extract_json_array(text):
     """穩陣抽取 JSON 陣列：去 code fence → raw_decode → 修復 trailing comma／全形逗號再試"""
     if not text:
@@ -140,18 +157,22 @@ def _extract_json_array(text):
 def generate_ai_questions(topic, count):
     mat = _topic_material(topic)
     prompt = (
-        f"你是小六常識科出題老師。根據以下教材知識點，生成 {count} 條選擇題。"
-        f"每題必須：4 個選項、1 個正確答案、1 句書面語解釋。只准用教材知識點，唔可以作新事實。"
-        f"\n\n鐵律：\n"
-        f"1.「answer」必須同其中一個「options」字面完全一樣（原字照抄），唔准加 A/B/C/D 前綴、唔准加括號或多餘字。\n"
-        f"2. 嚴格只輸出 JSON 陣列：唔好加 markdown、註解、尾隨逗號；每一行都要係合法 JSON。\n"
-        f"3. 每個字都要喺 JSON 字串入面，唔好中途斷行破壞結構。\n"
-        f"4. **每題必須係獨立知識題**：淨係考知識點本身，學生唔使閱讀任何額外資料就答到。\n"
-        f"5. **嚴禁資料題**：唔准喺題目入面引用／貼上任何資料段落、短文、圖表；唔准用「根據以下資料／閱讀下列短文／下文／上文」等字眼；唔准叫學生對照資料作答。\n"
-        f"6. 題目風格同教材原題一致，一題考一個知識點，直接問概念、特徵、例子、原因。\n"
-        f"   ✅ 好例子：「紅樹林嘅根點解要伸出泥土？」「下列哪種動物屬於兩棲類？」\n"
-        f"   ❌ 壞例子：「根據以下資料，回答第 8-11 題：……（貼段落）」\n\n"
-        f"格式：[{{\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"answer\":\"正確選項原字\",\"explanation\":\"...\"}}]\n\n教材：\n{mat[:4000]}"
+        f"你是小六常識科出題老師。根據以下教材知識點，生成 {count} 條題目（混合選擇題同短答題）。"
+        f"只准用教材知識點，唔可以作新事實。\n\n"
+        f"**題型分配：**約 7 成選擇題（type=mcq）、3 成短答題（type=short，學生自己打字，冇選項）。\n\n"
+        f"**選擇題選項要「接近、易混淆」：**錯誤選項要同正確答案屬同一範疇、字面相近，學生要真正理解先分到（考「鳥類」就用「哺乳類／爬行類／兩棲類」做錯誤選項，唔好整明顯錯）。\n\n"
+        f"**每題都要 hint 同 trap：**\n"
+        f"- hint＝教學生「點樣分析」（例：先睇身體表面特徵再判斷類別）。\n"
+        f"- trap＝指出最常見錯誤／混淆點（例：企鵝有羽毛屬鳥類，唔好被「識唔識飛」誤導）。\n"
+        f"- explanation＝書面語簡短解釋。\n\n"
+        f"鐵律：\n"
+        f"1. answer 必須同其中一個 options 字面完全一樣（原字照抄）。\n"
+        f"2. 嚴格只輸出 JSON 陣列，唔好加 markdown、註解、尾隨逗號。\n"
+        f"3. 每個字都要喺 JSON 字串入面，唔好中途斷行。\n"
+        f"4. 每題必須係獨立知識題，唔准引用／貼上資料段落、短文、圖表。\n\n"
+        f"格式：\n"
+        f"[{{\"type\":\"mcq\",\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"answer\":\"正確選項原字\",\"hint\":\"分析提示\",\"trap\":\"陷阱提醒\",\"explanation\":\"...\"}},\n"
+        f" {{\"type\":\"short\",\"question\":\"...\",\"answer\":\"參考答案\",\"hint\":\"分析提示\",\"trap\":\"陷阱提醒\"}}]\n\n教材：\n{mat[:4000]}"
     )
     out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=8000)
     if not out:
@@ -162,24 +183,34 @@ def generate_ai_questions(topic, count):
         st.code(out[:3000])
         return []
     qs = []
-    # 資料題／貼咗段落嘅題目一律作廢 — 訓練目標係知識點，唔係睇資料搵答案
     data_q_re = re.compile(r"根據(以下|下列|資料|這|该|短文|文章)|閱讀(以下|下列|資料)|下文|上文|資料顯示|以下資料|下列資料|短文中|文章中|段落中|看資料|原文")
     for item in arr:
         if not isinstance(item, dict):
             continue
         qtext = (item.get("question") or "").strip()
-        opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
-        if not qtext or len(opts) < 2:
+        qtype = (item.get("type") or "mcq").strip().lower()
+        hint = (item.get("hint") or "").strip()
+        trap = (item.get("trap") or "").strip()
+        expl = (item.get("explanation") or "").strip()
+        if not qtext or data_q_re.search(qtext) or len(qtext) > 120:
             continue
-        if data_q_re.search(qtext) or len(qtext) > 120:
-            continue  # 資料題 / 引用段落 → 作廢
-        matched = _match_answer(item.get("answer", ""), opts)
-        if matched is None:
-            continue  # 答案對唔返選項 → 題目作廢（嚴格，避免批改錯判）
-        qs.append({"unit": None, "topic": topic, "file": "AI", "type": "ai",
-                   "question": qtext, "options": opts, "answer": matched,
-                   "answer_index": opts.index(matched),
-                   "explanation": (item.get("explanation") or "").strip()})
+        if qtype == "short":
+            ans = (item.get("answer") or "").strip()
+            if not ans or len(ans) > 80:
+                continue
+            qs.append({"unit": None, "topic": topic, "file": "AI", "type": "short",
+                       "question": qtext, "options": [], "answer": ans,
+                       "answer_index": 0, "hint": hint, "trap": trap, "explanation": expl})
+        else:
+            opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
+            if len(opts) < 2:
+                continue
+            matched = _match_answer(item.get("answer", ""), opts)
+            if matched is None:
+                continue
+            qs.append({"unit": None, "topic": topic, "file": "AI", "type": "mcq",
+                       "question": qtext, "options": opts, "answer": matched,
+                       "answer_index": opts.index(matched), "hint": hint, "trap": trap, "explanation": expl})
     return qs[:count]
 
 def explain_answer(q, user_answer):
@@ -270,7 +301,14 @@ if not st.session_state.gs_questions:
 qs = st.session_state.gs_questions
 st.subheader(f"📝 今輪 {len(qs)} 題")
 for i, q in enumerate(qs):
-    st.radio(f"**{i + 1}.** {q['question']}", q["options"], key=f"gs_a{i}", index=None)
+    if q.get("type") == "short":
+        st.markdown(f"**{i + 1}.** ✍️ {q['question']}")
+        st.text_area("你的答案", key=f"gs_a{i}", label_visibility="collapsed", height=100, placeholder="用自己的文字作答…")
+    else:
+        st.radio(f"**{i + 1}.** 🔘 {q['question']}", q["options"], key=f"gs_a{i}", index=None)
+    if q.get("hint"):
+        with st.expander(f"💡 提示（第 {i + 1} 題）"):
+            st.markdown(q["hint"])
 
 c1, c2 = st.columns([1, 1])
 if not st.session_state.gs_checked:
@@ -281,16 +319,26 @@ else:
     results = []
     for i, q in enumerate(qs):
         user = st.session_state.get(f"gs_a{i}")
-        ok = user is not None and _norm(user) == _norm(q["answer"])
+        if q.get("type") == "short":
+            ok = _short_match(user, q["answer"])
+        else:
+            ok = user is not None and _norm(user) == _norm(q["answer"])
         results.append((i, user, ok))
-    correct = sum(1 for _, _, ok in results if ok)
+    correct = sum(1 for _, _, ok in results if ok is True)
     st.metric("🏆 得分", f"{correct} / {len(qs)}")
     for i, user, ok in results:
         q = qs[i]
-        if ok:
-            st.success(f"**✅ 第 {i + 1} 題**（你揀咗「{user}」）")
+        is_short = q.get("type") == "short"
+        verb = "答" if is_short else "揀"
+        label = "參考答案" if is_short else "正確答案"
+        if ok is True:
+            st.success(f"**✅ 第 {i + 1} 題**（你{verb}咗「{user}」）")
         else:
-            st.error(f"**❌ 第 {i + 1} 題**　你揀咗：「{user or '（未作答）'}」　正確答案：**{q['answer']}**")
+            st.error(f"**❌ 第 {i + 1} 題**　你{verb}咗：「{user or '（未作答）'}」　{label}：**{q['answer']}**")
+        if q.get("trap"):
+            st.caption("⚠️ 陷阱：" + q["trap"])
+        if q.get("hint"):
+            st.caption("🧭 分析：" + q["hint"])
         expl = explain_answer(q, user)
         if expl: st.caption("💡 " + expl)
     st.markdown("---")
