@@ -242,9 +242,9 @@ def generate_ai_thinking(topic, count):
         f"你是小六常識科出題老師。根據以下教材知識點，生成 {count} 條「思維訓練」題目，全部要考**分類（帶例外）**或者**類似特徵比較**。\n\n"
         f"題型 A（分類帶例外）：要求學生用某個標準分類，然後搵例外／跨類嘅例子（例：「按防禦方法分類，哪種動物同時具備兩種防禦？」「按繁殖方法分類，下列哪項是例外？」）。\n"
         f"題型 B（類似特徵）：要求學生比較兩個物種／事物嘅共同特徵（例：「XX 和 YY 有甚麼相似之處？」「下列哪種動物和 XX 一樣用保護色？」）。\n\n"
-        f"A、B 各佔一半。全部用四選一選擇題（type=mcq），選項要接近、易混淆，唔可以太易排除。\n"
+        f"A、B 各佔一半。約 7 成用四選一選擇題（type=mcq），選項要接近、易混淆，唔可以太易排除；約 3 成用短答題（type=short，學生自己打字作答、冇選項）。\n"
         f"每題 hint 要教解題策略（分類題：先定分類標準再逐項檢查邊項跨類／例外；類似特徵題：列出兩者特徵搵交集），trap 指出常見混淆點。\n\n"
-        f"鐵律：\n1. answer 必須同其中一個 options 字面完全一樣（原字照抄）。\n2. 嚴格只輸出 JSON 陣列，格式同一般 mcq 相同（含 type/question/options/answer/hint/trap/explanation），唔好加 markdown。\n3. 每題獨立知識題，只准用教材知識點，唔可以作新事實。\n\n教材：\n{mat[:4000]}"
+        f"鐵律：\n1. mcq 嘅 answer 必須同其中一個 options 字面完全一樣（原字照抄）；short 嘅 answer 寫簡短參考答案。\n2. 嚴格只輸出 JSON 陣列，格式含 type/question/options/answer/hint/trap/explanation（short 冇 options，可省略），唔好加 markdown。\n3. 每題獨立知識題，只准用教材知識點，唔可以作新事實。\n\n教材：\n{mat[:4000]}"
     )
     out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=8000)
     if not out:
@@ -257,20 +257,30 @@ def generate_ai_thinking(topic, count):
         if not isinstance(item, dict):
             continue
         qtext = (item.get("question") or "").strip()
+        qtype = (item.get("type") or "mcq").strip().lower()
+        hint = (item.get("hint") or "").strip()
+        trap = (item.get("trap") or "").strip()
+        expl = (item.get("explanation") or "").strip()
         if not qtext or len(qtext) > 120:
             continue
-        opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
-        if len(opts) < 2:
-            continue
-        matched = _match_answer(item.get("answer", ""), opts)
-        if matched is None:
-            continue
-        qs.append({"unit": None, "topic": topic, "file": "AI", "type": "mcq",
-                   "question": qtext, "options": opts, "answer": matched,
-                   "answer_index": opts.index(matched),
-                   "hint": (item.get("hint") or "").strip(),
-                   "trap": (item.get("trap") or "").strip(),
-                   "explanation": (item.get("explanation") or "").strip()})
+        if qtype == "short":
+            ans = (item.get("answer") or "").strip()
+            if not ans or len(ans) > 80:
+                continue
+            qs.append({"unit": None, "topic": topic, "file": "AI", "type": "short",
+                       "question": qtext, "options": [], "answer": ans,
+                       "answer_index": 0, "hint": hint, "trap": trap, "explanation": expl})
+        else:
+            opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
+            if len(opts) < 2:
+                continue
+            matched = _match_answer(item.get("answer", ""), opts)
+            if matched is None:
+                continue
+            qs.append({"unit": None, "topic": topic, "file": "AI", "type": "mcq",
+                       "question": qtext, "options": opts, "answer": matched,
+                       "answer_index": opts.index(matched),
+                       "hint": hint, "trap": trap, "explanation": expl})
     return qs[:count]
 
 def explain_answer(q, user_answer):
