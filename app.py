@@ -229,6 +229,50 @@ def generate_ai_questions(topic, count):
                        "answer_index": opts.index(matched), "hint": hint, "trap": trap, "explanation": expl})
     return qs[:count]
 
+# ===== 🧠 思維題型：分類（帶例外）× 類似特徵 =====
+THINK_RE = re.compile(r"分類|例外|跨類|相似|類似|共同|比較|相同|不屬於|哪兩項|哪項正確|哪一項正確")
+
+def filter_thinking(qs):
+    """篩選思維題型（分類帶例外／類似特徵／比較）"""
+    return [q for q in qs if THINK_RE.search(q.get("question", ""))]
+
+def generate_ai_thinking(topic, count):
+    mat = _topic_material(topic)
+    prompt = (
+        f"你是小六常識科出題老師。根據以下教材知識點，生成 {count} 條「思維訓練」題目，全部要考**分類（帶例外）**或者**類似特徵比較**。\n\n"
+        f"題型 A（分類帶例外）：要求學生用某個標準分類，然後搵例外／跨類嘅例子（例：「按防禦方法分類，哪種動物同時具備兩種防禦？」「按繁殖方法分類，下列哪項是例外？」）。\n"
+        f"題型 B（類似特徵）：要求學生比較兩個物種／事物嘅共同特徵（例：「XX 和 YY 有甚麼相似之處？」「下列哪種動物和 XX 一樣用保護色？」）。\n\n"
+        f"A、B 各佔一半。全部用四選一選擇題（type=mcq），選項要接近、易混淆，唔可以太易排除。\n"
+        f"每題 hint 要教解題策略（分類題：先定分類標準再逐項檢查邊項跨類／例外；類似特徵題：列出兩者特徵搵交集），trap 指出常見混淆點。\n\n"
+        f"鐵律：\n1. answer 必須同其中一個 options 字面完全一樣（原字照抄）。\n2. 嚴格只輸出 JSON 陣列，格式同一般 mcq 相同（含 type/question/options/answer/hint/trap/explanation），唔好加 markdown。\n3. 每題獨立知識題，只准用教材知識點，唔可以作新事實。\n\n教材：\n{mat[:4000]}"
+    )
+    out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=8000)
+    if not out:
+        return []
+    arr = _extract_json_array(out)
+    if not isinstance(arr, list):
+        return []
+    qs = []
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        qtext = (item.get("question") or "").strip()
+        if not qtext or len(qtext) > 120:
+            continue
+        opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
+        if len(opts) < 2:
+            continue
+        matched = _match_answer(item.get("answer", ""), opts)
+        if matched is None:
+            continue
+        qs.append({"unit": None, "topic": topic, "file": "AI", "type": "mcq",
+                   "question": qtext, "options": opts, "answer": matched,
+                   "answer_index": opts.index(matched),
+                   "hint": (item.get("hint") or "").strip(),
+                   "trap": (item.get("trap") or "").strip(),
+                   "explanation": (item.get("explanation") or "").strip()})
+    return qs[:count]
+
 def explain_answer(q, user_answer):
     if q.get("explanation"): return q["explanation"]
     if not st.secrets.get("OPENAI_API_KEY", ""): return ""
@@ -275,6 +319,12 @@ with st.sidebar:
         max_count = max(1, min(len(all_questions), 20))
         count = st.slider("每輪題數", 5, max_count, min(10, max_count), key="gs_count")
         mode = st.radio("生成模式", ["📖 教材原題", "✨ AI 生成新題"], key="gs_mode")
+        think_mode = st.checkbox("🧠 思維訓練：分類（帶例外）× 類似特徵", key="gs_think",
+                                 help="只出分類題（搵例外／跨類）同類似特徵比較題，訓練高階思維（Q19/20 內容弱項跟進）")
+        if think_mode:
+            with st.expander("🧭 解題策略", expanded=True):
+                st.markdown("**分類題（帶例外）**：先定分類標準 → 逐項檢查邊項「過唔到標準」或者「同時跨兩類」")
+                st.markdown("**類似特徵題**：逐項列出兩個對象嘅特徵 → 搵**交集**（共同點）→ 揀覆蓋最多嘅答案")
         if st.button("🎲 生成題目", type="primary", use_container_width=True):
             if not selected:
                 st.warning("⚠️ 請先揀至少一個主題")
@@ -283,10 +333,20 @@ with st.sidebar:
                 if mode.startswith("✨"):
                     with st.spinner("✨ AI 生成緊題目，請稍候…"):
                         pool = []
-                        for t in chosen_topics: pool += generate_ai_questions(t, count)
+                        for t in chosen_topics:
+                            pool += generate_ai_thinking(t, count) if think_mode else generate_ai_questions(t, count)
                     qs = pool[:count]
                 else:
                     pool = [q for q in all_questions if q["topic"] in chosen_topics]
+                    if think_mode:
+                        think_pool = filter_thinking(pool)
+                        if len(think_pool) < count:
+                            extra = filter_thinking([q for q in all_questions if q["topic"] not in chosen_topics])
+                            think_pool += extra
+                        if not think_pool:
+                            st.warning("⚠️ 冇符合嘅思維題，已改用所選主題全部題目")
+                            think_pool = pool
+                        pool = think_pool
                     random.shuffle(pool); qs = pool[:count]
                 if qs:
                     set_round(qs)
