@@ -236,15 +236,37 @@ def filter_thinking(qs):
     """篩選思維題型（分類帶例外／類似特徵／比較）"""
     return [q for q in qs if THINK_RE.search(q.get("question", ""))]
 
+THINK_FACTS = (
+    "【教材正確事實（只准用呢啲，嚴禁自創分類名詞）】\n"
+    "· 動物防禦／保護方法只有：保護色（顏色似環境）、偽裝（形態似物體）、警戒色（鮮豔警告有毒）、厚脂肪、厚硬殼、刺、有毒、葉合攏／閉合。\n"
+    "· 教材冇「物理防禦／化學防禦／運動防禦」呢啲分類，嚴禁用。\n"
+    "· 動物分類：鳥類（羽毛）、魚類（鰓呼吸）、哺乳類（毛髮＋母乳＋肺呼吸）、爬行類（乾燥鱗片＋肺呼吸）、兩棲類（濕潤無鱗＋肺和皮膚呼吸）、昆蟲類（三對腳＋頭胸腹）。\n"
+    "· 正確「例外／跨類」例子：蝙蝠有翅膀會飛但係哺乳類；海豚住海但係哺乳類；海龜住海但係爬行類；青蛙（兩棲類）跨水陸；枯葉蝶＝保護色（體色似枯葉）＋偽裝（外形似枯葉）；含羞草＝葉合攏＋葉柄有刺。\n"
+    "· 保護色例子：獅子（金黃似草原）、草蜢（綠似草）、樹蛙、北極熊（白毛）。\n"
+    "· 偽裝例子：竹節蟲（似樹枝）、枯葉蝶（似枯葉）、葉海龍（似海草）。\n"
+    "· 警戒色例子：箭毒蛙（鮮豔有毒）。\n"
+)
+
+BANNED_THINK_TERMS = ["物理防禦", "化學防禦", "運動防禦", "機械防禦", "生理防禦", "防禦方式分類"]
+
+def _think_banned(qtext, opts, ans):
+    blob = qtext + "".join(opts) + ans
+    return any(t in blob for t in BANNED_THINK_TERMS)
+
 def generate_ai_thinking(topic, count):
     mat = _topic_material(topic)
     prompt = (
-        f"你是小六常識科出題老師。根據以下教材知識點，生成 {count} 條「思維訓練」題目，全部要考**分類（帶例外）**或者**類似特徵比較**。\n\n"
-        f"題型 A（分類帶例外）：要求學生用某個標準分類，然後搵例外／跨類嘅例子（例：「按防禦方法分類，哪種動物同時具備兩種防禦？」「按繁殖方法分類，下列哪項是例外？」）。\n"
-        f"題型 B（類似特徵）：要求學生比較兩個物種／事物嘅共同特徵（例：「XX 和 YY 有甚麼相似之處？」「下列哪種動物和 XX 一樣用保護色？」）。\n\n"
-        f"A、B 各佔一半。約 7 成用四選一選擇題（type=mcq），選項要接近、易混淆，唔可以太易排除；約 3 成用短答題（type=short，學生自己打字作答、冇選項）。\n"
-        f"每題 hint 要教解題策略（分類題：先定分類標準再逐項檢查邊項跨類／例外；類似特徵題：列出兩者特徵搵交集），trap 指出常見混淆點。\n\n"
-        f"鐵律：\n1. mcq 嘅 answer 必須同其中一個 options 字面完全一樣（原字照抄）；short 嘅 answer 寫簡短參考答案。\n2. 嚴格只輸出 JSON 陣列，格式含 type/question/options/answer/hint/trap/explanation（short 冇 options，可省略），唔好加 markdown。\n3. 每題獨立知識題，只准用教材知識點，唔可以作新事實。\n\n教材：\n{mat[:4000]}"
+        f"你是小六常識科出題老師。根據以下【教材】知識點，生成 {count} 條「思維訓練」題目，全部考**分類（帶例外）**或者**類似特徵比較**。\n\n"
+        + THINK_FACTS +
+        f"題型 A（分類帶例外）：用某個標準分類，搵例外／跨類例子。題型 B（類似特徵）：比較兩個對象嘅共同點。A、B 各佔一半。\n"
+        f"約 7 成用四選一選擇題（type=mcq），選項要接近、易混淆；約 3 成用短答題（type=short，自己打字作答、冇選項）。\n"
+        f"每題 hint 教解題策略、trap 指常見混淆點。\n\n"
+        f"【鐵律】\n"
+        f"1. mcq 嘅 answer 必須同其中一個 options 字面完全一樣（原字照抄）；short 嘅 answer 寫簡短參考答案。\n"
+        f"2. 嚴格只輸出 JSON 陣列，格式含 type/question/options/answer/hint/trap/explanation（short 冇 options，可省略），唔好加 markdown。\n"
+        f"3. 只准用【教材】同【教材正確事實】入面嘅知識，嚴禁自創分類名詞（例如物理防禦／化學防禦）或作新事實。\n"
+        f"4. 出完每題自己檢查一次：答案係咪真係啱？有冇自相矛盾？題目有冇答非所問？有問題嘅題目寧願唔好出。\n\n"
+        f"教材：\n{mat[:4000]}"
     )
     out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=8000)
     if not out:
@@ -267,6 +289,8 @@ def generate_ai_thinking(topic, count):
             ans = (item.get("answer") or "").strip()
             if not ans or len(ans) > 80:
                 continue
+            if _think_banned(qtext, [], ans):
+                continue
             qs.append({"unit": None, "topic": topic, "file": "AI", "type": "short",
                        "question": qtext, "options": [], "answer": ans,
                        "answer_index": 0, "hint": hint, "trap": trap, "explanation": expl})
@@ -277,11 +301,14 @@ def generate_ai_thinking(topic, count):
             matched = _match_answer(item.get("answer", ""), opts)
             if matched is None:
                 continue
+            if _think_banned(qtext, opts, matched):
+                continue
             qs.append({"unit": None, "topic": topic, "file": "AI", "type": "mcq",
                        "question": qtext, "options": opts, "answer": matched,
                        "answer_index": opts.index(matched),
                        "hint": hint, "trap": trap, "explanation": expl})
     return qs[:count]
+
 
 def explain_answer(q, user_answer):
     if q.get("explanation"): return q["explanation"]
