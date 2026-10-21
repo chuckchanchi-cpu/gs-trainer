@@ -332,6 +332,18 @@ st.caption("小六常識科 MCQ 訓練 — 揀主題 → 每輪出題 → 即場
 if "gs_questions" not in st.session_state: st.session_state.gs_questions = []
 if "gs_checked" not in st.session_state: st.session_state.gs_checked = False
 
+def pick_questions(pool, count, priority=True):
+    """出題選題：priority=True 時 hand notes 題目優先抽，其餘補足（考試偏向 hand notes）"""
+    if not priority:
+        random.shuffle(pool)
+        return pool[:count]
+    hn = [q for q in pool if "手記" in (q.get("file") or "")]
+    rest = [q for q in pool if "手記" not in (q.get("file") or "")]
+    random.shuffle(hn)
+    random.shuffle(rest)
+    return (hn + rest)[:count]
+
+
 def set_round(qs):
     """換新一輪題目：清走上一輪嘅作答狀態（gs_a0/gs_a1/...），避免殘留答案影響批改"""
     for k in list(st.session_state.keys()):
@@ -356,6 +368,8 @@ with st.sidebar:
         max_count = max(1, min(len(all_questions), 20))
         count = st.slider("每輪題數", 5, max_count, min(10, max_count), key="gs_count")
         mode = st.radio("生成模式", ["📖 教材原題", "✨ AI 生成新題"], key="gs_mode")
+        handnote_priority = st.checkbox("🎯 手記內容優先（考試常考）", value=True, key="gs_handnote_priority",
+                                         help="出題時優先抽 hand notes 內容，其餘題目補足；考試通常偏向 hand notes")
         think_mode = st.checkbox("🧠 思維訓練：分類（帶例外）× 類似特徵", key="gs_think",
                                  help="只出分類題（搵例外／跨類）同類似特徵比較題，訓練高階思維（Q19/20 內容弱項跟進）")
         if think_mode:
@@ -384,7 +398,7 @@ with st.sidebar:
                             st.warning("⚠️ 冇符合嘅思維題，已改用所選主題全部題目")
                             think_pool = pool
                         pool = think_pool
-                    random.shuffle(pool); qs = pool[:count]
+                    qs = pick_questions(pool, count, st.session_state.get("gs_handnote_priority", True))
                 if qs:
                     set_round(qs)
                     st.rerun()
@@ -472,8 +486,7 @@ if c2.button("🔄 再嚟一輪", use_container_width=True):
             qs2 = pool[:cnt]
         else:
             pool = [q for q in all_questions if q["topic"] in chosen_topics]
-            random.shuffle(pool)
-            qs2 = pool[:cnt]
+            qs2 = pick_questions(pool, cnt, st.session_state.get("gs_handnote_priority", True))
         if qs2:
             set_round(qs2)
             st.rerun()
