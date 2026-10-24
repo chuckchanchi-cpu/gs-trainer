@@ -128,16 +128,28 @@ def _short_match(user, ans):
     # 極短答案（如「肺和皮膚」）：只要核心詞包含就算啱
     if len(na) <= 6 and na in nu:
         return True
-    # 冇 AI key → 退返寬鬆關鍵詞命中
+    # 同義表述寬鬆比對：雙向字元覆蓋（例：「長而有力的臂」嘅 長/有/臂 喺「擁有長手臂…」出現 → 啱）
+    def _char_coverage(u, a):
+        def cov(x, y):
+            chars = [c for c in x if '\u4e00' <= c <= '\u9fff']
+            if not chars:
+                return 0.0
+            return sum(1 for c in chars if c in y) / len(chars)
+        return max(cov(u, a), cov(a, u))
+    cov = _char_coverage(nu, na)
+    if cov >= 0.5:
+        return True
+    # 退返寬鬆關鍵詞命中（同義詞容錯）
+    keys = re.findall(r'[\u4e00-\u9fff]{2,}', na)
+    if keys and sum(1 for k in keys if k in nu) / len(keys) >= 0.5:
+        return True
     if not st.secrets.get("OPENAI_API_KEY", ""):
-        keys = re.findall(r'[\u4e00-\u9fff]{2,}', na)
-        if keys:
-            return sum(1 for k in keys if k in nu) / len(keys) >= 0.5
         return False
-    # AI 語意判斷：核心意思一致就啱，唔使字句一樣
+    # AI 語意判斷：核心意思一致就啱，唔使字句一樣；判斷唔到退回寬鬆比對結果
     prompt = (f"你是小六常識科批改老師。判斷學生短答嘅核心意思同參考答案係咪一致，"
-              f"唔使字句一模一樣，意思啱就得。\n"
-              f"參考答案：{ans}\n學生答案：{user}\n只回覆一個字：對 或 錯")
+              f"唔使字句一模一樣，意思啱就得（同義詞、長短描述都算啱）。"
+              f"例子：參考答案「擁有長手臂」，學生答「長而有力的臂」→ 對。"
+              f"參考答案：{ans}。學生答案：{user}。只回覆一個字：對 或 錯")
     out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=10)
     if out:
         o = _norm(out).lower()
@@ -145,7 +157,8 @@ def _short_match(user, ans):
             return True
         if "錯" in o or "否" in o or "✗" in o or "wrong" in o or "no" in o:
             return False
-    return False
+    # AI 判斷唔到：用寬鬆比對結果（唔好 fail-closed 誤殺同義答案）
+    return cov >= 0.35
 
 
 def _extract_json_array(text):
