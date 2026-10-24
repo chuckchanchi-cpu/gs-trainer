@@ -190,6 +190,7 @@ def generate_ai_questions(topic, count):
         f"只准用教材知識點，唔可以作新事實。\n\n"
         f"**題型分配：**約 7 成選擇題（type=mcq）、3 成短答題（type=short，學生自己打字，冇選項）。\n\n"
         f"**選擇題選項要「接近、易混淆」：**錯誤選項要同正確答案屬同一範疇、字面相近，學生要真正理解先分到（考「鳥類」就用「哺乳類／爬行類／兩棲類」做錯誤選項，唔好整明顯錯）。\n\n"
+        f"**答案唯一性：**涉及物種特徵/習性嘅題目，正確答案必須同教材/手記知識點唯一對應，其他選項唔可以有合理可能性；同一知識點唔好生成互相矛盾嘅答案。\n\n"
         f"**每題都要 hint 同 trap：**\n"
         f"- hint＝教學生「點樣分析」（例：先睇身體表面特徵再判斷類別）。\n"
         f"- trap＝指出最常見錯誤／混淆點（例：企鵝有羽毛屬鳥類，唔好被「識唔識飛」誤導）。\n"
@@ -440,6 +441,7 @@ if not st.session_state.gs_questions:
 
 qs = st.session_state.gs_questions
 st.subheader(f"📝 今輪 {len(qs)} 題")
+st.caption("⚠️ 選項順序每輪隨機打亂 — 記答案嘅**內容**，唔好記 A/B/C 字母！")
 for i, q in enumerate(qs):
     if q.get("type") == "short":
         st.markdown(f"**{i + 1}.** ✍️ {q['question']}")
