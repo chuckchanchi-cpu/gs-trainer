@@ -115,7 +115,7 @@ def _match_answer(ans, opts):
     return None
 
 
-def _short_match(user, ans):
+def _short_match(user, ans, question=""):
     """短答題批改：核心意思相同就算啱（唔使字句一模一樣）。先快速比對，再交 AI 判斷語意。"""
     if not user:
         return None
@@ -146,9 +146,11 @@ def _short_match(user, ans):
     if not st.secrets.get("OPENAI_API_KEY", ""):
         return cov >= 0.6
     # AI 語意判斷：核心意思一致就啱，唔使字句一樣；判斷唔到退回寬鬆比對結果
-    prompt = (f"你是小六常識科批改老師。判斷學生短答嘅核心意思同參考答案係咪一致，"
-              f"唔使字句一模一樣，意思啱就得（同義詞、長短描述都算啱）。"
-              f"例子：參考答案「擁有長手臂」，學生答「長而有力的臂」→ 對。"
+    # AI 判斷：以「是否正確回答題目」為準（參考答案只係其中一個標準答案；
+    # 開放式問題如「列出兩項」，列咗兩項事實正確嘅項目就算啱，唔使同參考答案一樣）
+    prompt = (f"你是小六常識科批改老師。判斷學生嘅短答係咪正確回答咗題目。"
+              f"參考答案只係其中一個標準答案；只要學生答案事實正確、符合題目要求（例如題目要「列出兩項」，學生列咗兩項正確事實，即使同參考答案唔同項目都算啱；同義表述都算啱）。"
+              f"題目：{question or '（無題目，只對參考答案）'}。"
               f"參考答案：{ans}。學生答案：{user}。只回覆一個字：對 或 錯")
     out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=10)
     if out:
@@ -462,7 +464,7 @@ else:
     for i, q in enumerate(qs):
         user = st.session_state.get(f"gs_a{i}")
         if q.get("type") == "short":
-            ok = _short_match(user, q["answer"])
+            ok = _short_match(user, q["answer"], q.get("question", ""))
         else:
             ok = user is not None and _norm(user) == _norm(q["answer"])
         results.append((i, user, ok))
