@@ -137,14 +137,14 @@ def _short_match(user, ans):
             return sum(1 for c in chars if c in y) / len(chars)
         return max(cov(u, a), cov(a, u))
     cov = _char_coverage(nu, na)
-    if cov >= 0.5:
+    if cov >= 0.7:
         return True
-    # 退返寬鬆關鍵詞命中（同義詞容錯）
+    # 退返寬鬆關鍵詞命中（同義詞容錯）— 門檻 0.75：要絕大部分核心詞命中先自動收貨，避免「共享字詞」假陽性
     keys = re.findall(r'[\u4e00-\u9fff]{2,}', na)
-    if keys and sum(1 for k in keys if k in nu) / len(keys) >= 0.5:
+    if keys and sum(1 for k in keys if k in nu) / len(keys) >= 0.75:
         return True
     if not st.secrets.get("OPENAI_API_KEY", ""):
-        return False
+        return cov >= 0.6
     # AI 語意判斷：核心意思一致就啱，唔使字句一樣；判斷唔到退回寬鬆比對結果
     prompt = (f"你是小六常識科批改老師。判斷學生短答嘅核心意思同參考答案係咪一致，"
               f"唔使字句一模一樣，意思啱就得（同義詞、長短描述都算啱）。"
@@ -157,8 +157,8 @@ def _short_match(user, ans):
             return True
         if "錯" in o or "否" in o or "✗" in o or "wrong" in o or "no" in o:
             return False
-    # AI 判斷唔到：用寬鬆比對結果（唔好 fail-closed 誤殺同義答案）
-    return cov >= 0.35
+    # AI 判斷唔到：用保守比對結果（0.6）— 唔好 fail-closed 誤殺同義答案，亦唔好 fail-open 收錯答案
+    return cov >= 0.6
 
 
 def _extract_json_array(text):
