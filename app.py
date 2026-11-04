@@ -8,6 +8,14 @@ AI（qwen3.8-flash）設定來自 Streamlit Secrets：OPENAI_API_KEY / SILRA_API
 import os, json, random, re, unicodedata
 import streamlit as st
 
+def _get_api_key():
+    """寬鬆搵 API key：接受多種常見名（OPENAI_API_KEY / SILRA_API_KEY / API_KEY / AI / KEY）"""
+    for name in ("OPENAI_API_KEY", "SILRA_API_KEY", "SILRA_KEY", "API_KEY", "AI", "KEY", "OPENAI_KEY"):
+        v = _sk(name, "")
+        if v:
+            return v
+    return ""
+
 def _sk(key, default=""):
     """安全讀 Streamlit Secrets：冇設定 Secrets 時回傳 default，唔炸 app"""
     try:
@@ -62,7 +70,7 @@ def build_topic_label(unit, topic):
 def _silra_chat(messages, max_tokens=2048):
     import requests
     url = _sk("SILRA_API_URL", "https://api.silra.cn/v1/chat/completions")
-    key = _sk("OPENAI_API_KEY", "")
+    key = _get_api_key()
     model = _sk("MODEL_NAME", "qwen3.8-flash")
     if not key:
         st.error("🔑 未設定 OPENAI_API_KEY。請在 Streamlit Settings → Secrets 加入。")
@@ -157,7 +165,7 @@ def _short_match(user, ans, question=""):
     keys = re.findall(r'[\u4e00-\u9fff]{2,}', na)
     if keys and sum(1 for k in keys if k in nu) / len(keys) >= 0.75:
         return True
-    if not _sk("OPENAI_API_KEY", ""):
+    if not _get_api_key():
         return cov >= 0.6
     # AI 語意判斷：核心意思一致就啱，唔使字句一樣；判斷唔到退回寬鬆比對結果
     # AI 判斷：以「是否正確回答題目」為準（參考答案只係其中一個標準答案；
@@ -342,7 +350,7 @@ def generate_ai_thinking(topic, count):
 
 def explain_answer(q, user_answer):
     if q.get("explanation"): return q["explanation"]
-    if not _sk("OPENAI_API_KEY", ""): return ""
+    if not _get_api_key(): return ""
     prompt = (f"題目：{q['question']}\n選項：{'、'.join(q['options'])}\n正確答案：{q['answer']}\n"
               f"請用書面語、簡短（2-3 句）解釋為何正確答案係「{q['answer']}」。")
     out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=400)
