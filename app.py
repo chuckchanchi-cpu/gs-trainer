@@ -19,7 +19,8 @@ def _get_api_key():
 def _sk(key, default=""):
     """安全讀 Streamlit Secrets：冇設定 Secrets 時回傳 default，唔炸 app"""
     try:
-        return _sk(key, default)
+        val = st.secrets.get(key)
+        return val if val not in (None, "") else default
     except Exception:
         return default
 
