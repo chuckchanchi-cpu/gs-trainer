@@ -66,6 +66,12 @@ def _silra_chat(messages, max_tokens=2048):
     model = _sk("MODEL_NAME", "qwen3.8-flash")
     if not key:
         st.error("🔑 未設定 OPENAI_API_KEY。請在 Streamlit Settings → Secrets 加入。")
+        # 診斷：顯示偵測到嘅 Secrets 名（唔顯示值），方便搵出改錯名/格式問題
+        try:
+            names = list(st.secrets.keys())
+            st.caption(f"🔍 目前偵測到嘅 Secrets 名：{names if names else '（完全冇）'} — 名字必須係 OPENAI_API_KEY（大寫＋底線）")
+        except Exception:
+            st.caption("🔍 目前完全讀唔到 Secrets — 請檢查 Secrets 係 TOML 格式：OPENAI_API_KEY = \"sk-...\"（有等號、有引號），改完要 Reboot app")
         return None
     try:
         r = requests.post(url,
