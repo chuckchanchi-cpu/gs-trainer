@@ -208,6 +208,94 @@ def _extract_json_array(text):
     return None
 
 
+def generate_ai_questions_multi(topics, count):
+    """多個 topic 一次過生成（單次 API call）
+    原本做法係每個 topic 各 call 一次、每次都生成 count 題：
+      揀 5 個 topic → 5 次 call、生成 100 題、實際只用 20 題（浪費 80 題，等 100-200 秒）
+    改成：合併所有 topic 教材 → 一次 call → 只生成 count 題（快 N 倍）
+    """
+    if not topics:
+        return []
+    if len(topics) == 1:
+        return generate_ai_questions(topics[0], count)
+
+    # 合併各 topic 教材（每 topic 限額，避免 prompt 過長）
+    per_topic = max(600, 4000 // len(topics))
+    chunks = []
+    for t in topics:
+        mat = _topic_material(t)
+        chunks.append(f"【{t}】\n{mat[:per_topic]}")
+    mat = "\n\n".join(chunks)
+
+    prompt = (
+        f"你是小六常識科出題老師。根據以下教材知識點，生成 {count} 條題目（混合選擇題同短答題），"
+        f"題目要平均分佈於以下 {len(topics)} 個主題：{'、'.join(topics)}。\n"
+        f"只准用教材知識點，唔可以作新事實。**嚴格限制：只可以用下面教材入面列出嘅事實，唔可以加入任何教材之外嘅常識或課外知識**。\n\n"
+        f"**題型分配：**約 7 成選擇題（type=mcq）、3 成短答題（type=short，學生自己打字，冇選項）。\n\n"
+        f"**選擇題選項要「接近、易混淆」：**錯誤選項要同正確答案屬同一範疇、字面相近，學生要真正理解先分到。\n\n"
+        f"**答案唯一性：**涉及物種特徵/習性嘅題目，正確答案必須同教材/手記知識點唯一對應，其他選項唔可以有合理可能性。\n\n"
+        f"**每題都要 hint 同 trap：**\n"
+        f"- hint＝教學生「點樣分析」。\n"
+        f"- trap＝指出最常見錯誤／混淆點。\n"
+        f"- explanation＝書面語簡短解釋。\n\n"
+        f"鐵律：\n"
+        f"1. answer 必須同其中一個 options 字面完全一樣（原字照抄）。\n"
+        f"2. 嚴格只輸出 JSON 陣列，唔好加 markdown、註解、尾隨逗號。\n"
+        f"3. 每個字都要喺 JSON 字串入面，唔好中途斷行。\n"
+        f"4. 每題必須係獨立知識題，唔准引用／貼上資料段落、短文、圖表。\n\n"
+        f"格式：\n"
+        f"[{{\"type\":\"mcq\",\"question\":\"...\",\"options\":[\"...\",\"...\",\"...\",\"...\"],\"answer\":\"正確選項原字\",\"hint\":\"分析提示\",\"trap\":\"陷阱提醒\",\"explanation\":\"...\"}},\n"
+        f" {{\"type\":\"short\",\"question\":\"...\",\"answer\":\"參考答案\",\"hint\":\"分析提示\",\"trap\":\"陷阱提醒\"}}]\n\n教材：\n{mat[:4500]}"
+    )
+    # max_tokens 按題數調整：每題約 220 tokens，最少 3000
+    mt = max(3000, min(8000, count * 220))
+    out = _silra_chat([{"role": "user", "content": prompt}], max_tokens=mt)
+    if not out:
+        return []
+    arr = _extract_json_array(out)
+    if not isinstance(arr, list):
+        st.error("⚠️ AI 回傳格式無法解析 — 試多一次？（如果經常出現，可減少每輪題數）")
+        st.code(out[:2000])
+        return []
+
+    qs = []
+    data_q_re = re.compile(r"根據(以下|下列|資料|這|该|短文|文章)|閱讀(以下|下列|資料)|下文|上文|資料顯示|以下資料|下列資料|短文中|文章中|段落中|看資料|原文")
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        qtext = (item.get("question") or "").strip()
+        qtype = (item.get("type") or "mcq").strip().lower()
+        hint = (item.get("hint") or "").strip()
+        trap = (item.get("trap") or "").strip()
+        expl = (item.get("explanation") or "").strip()
+        if not qtext or data_q_re.search(qtext) or len(qtext) > 120:
+            continue
+        topic_guess = None
+        for t in topics:
+            if t in qtext:
+                topic_guess = t
+                break
+        if qtype == "short":
+            ans = (item.get("answer") or "").strip()
+            if not ans or len(ans) > 80:
+                continue
+            qs.append({"unit": None, "topic": topic_guess or topics[0], "file": "AI", "type": "short",
+                       "question": qtext, "options": [], "answer": ans,
+                       "answer_index": 0, "hint": hint, "trap": trap, "explanation": expl})
+        else:
+            opts = [str(o).strip() for o in (item.get("options") or []) if str(o).strip()]
+            if len(opts) < 2:
+                continue
+            matched = _match_answer(item.get("answer", ""), opts)
+            if matched is None:
+                continue
+            qs.append({"unit": None, "topic": topic_guess or topics[0], "file": "AI", "type": "mcq",
+                       "question": qtext, "options": opts, "answer": matched,
+                       "answer_index": opts.index(matched),
+                       "hint": hint, "trap": trap, "explanation": expl})
+    return qs[:count]
+
+
 def generate_ai_questions(topic, count):
     mat = _topic_material(topic)
     prompt = (
@@ -485,11 +573,16 @@ with st.sidebar:
             else:
                 chosen_topics = [label_to_topic[x] for x in selected]
                 if mode.startswith("✨"):
-                    with st.spinner("✨ AI 生成緊題目，請稍候…"):
-                        pool = []
-                        for t in chosen_topics:
-                            pool += generate_ai_thinking(t, count) if think_mode else generate_ai_questions(t, count)
-                    qs = pool[:count]
+                    if think_mode:
+                        # 思維訓練題型特殊，維持逐 topic 生成（通常只揀 1-2 個）
+                        with st.spinner("✨ AI 生成緊思維題，請稍候…"):
+                            pool = []
+                            for t in chosen_topics:
+                                pool += generate_ai_thinking(t, count)
+                        qs = pool[:count]
+                    else:
+                        with st.spinner(f"✨ AI 生成緊題目（{len(chosen_topics)} 個主題一次過生成）…"):
+                            qs = generate_ai_questions_multi(chosen_topics, count)
                 else:
                     pool = [q for q in all_questions if q["topic"] in chosen_topics]
                     if think_mode:
@@ -584,10 +677,8 @@ if c2.button("🔄 再嚟一輪", use_container_width=True):
         chosen_topics = [label_to_topic[x] for x in st.session_state.gs_topics]
         cnt = st.session_state.gs_count
         if st.session_state.get("gs_mode", "").startswith("✨"):
-            with st.spinner("✨ AI 生成緊題目，請稍候…"):
-                pool = []
-                for t in chosen_topics: pool += generate_ai_questions(t, cnt)
-            qs2 = pool[:cnt]
+            with st.spinner(f"✨ AI 生成緊題目（{len(chosen_topics)} 個主題一次過生成）…"):
+                qs2 = generate_ai_questions_multi(chosen_topics, cnt)
         else:
             pool = [q for q in all_questions if q["topic"] in chosen_topics]
             qs2 = pick_questions(pool, cnt, st.session_state.get("gs_handnote_priority", True))
