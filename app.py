@@ -371,16 +371,80 @@ st.caption("小六常識科 MCQ 訓練 — 揀主題 → 每輪出題 → 即場
 if "gs_questions" not in st.session_state: st.session_state.gs_questions = []
 if "gs_checked" not in st.session_state: st.session_state.gs_checked = False
 
+def _gs_norm_stem(s):
+    """正規化題幹：全形→半形、去空白標點，用嚟辨認『同一個問題』"""
+    s = unicodedata.normalize("NFKC", s or "")
+    s = re.sub(r"[＿_]+", "＿", s)
+    s = re.sub(r"[\s「」『』\"'“”’（）()，,。．.、：:；;！!？?\-–—]+", "", s)
+    return s
+
+def _gs_template(qtext):
+    """抽出句式模板（例子：「X」的內容是？），用嚟平均分佈唔同問法"""
+    s = re.sub(r"「[^」]{1,14}」", "「X」", qtext or "")
+    s = re.sub(r"[＿_]+", "＿", s)
+    return s
+
+def _gs_quality(q):
+    """同一個題幹有多個版本時，判斷邊個資訊最完整"""
+    return (
+        1 if (q.get("explanation") or "").strip() else 0,
+        1 if (q.get("hint") or "").strip() else 0,
+        len(q.get("options") or []),
+        len(q.get("answer") or ""),
+    )
+
 def pick_questions(pool, count, priority=True):
-    """出題選題：priority=True 時 hand notes 題目優先抽，其餘補足（考試偏向 hand notes）"""
-    if not priority:
-        random.shuffle(pool)
-        return pool[:count]
-    hn = [q for q in pool if "手記" in (q.get("file") or "")]
-    rest = [q for q in pool if "手記" not in (q.get("file") or "")]
-    random.shuffle(hn)
-    random.shuffle(rest)
-    return (hn + rest)[:count]
+    """出題選題（三重優化）
+    ① 同一題幹只出一題 — 唔會一輪撞同一條問題（題庫有 51 組題幹重複）
+    ② 按句式模板輪流分配 — 唔會一輪全部「「X」的內容是？」（原本 42 題集中同一句式）
+    ③ priority=True 時 hand notes 優先（考試偏向手記），但仍受 ①② 約束
+    """
+    if not pool:
+        return []
+
+    # ① 同一題幹分組：每組揀資訊最完整嘅版本（同級就隨機，令跨輪有變化）
+    by_stem = {}
+    for q in pool:
+        k = _gs_norm_stem(q.get("question"))
+        by_stem.setdefault(k, []).append(q)
+    uniq = []
+    for k, group in by_stem.items():
+        group.sort(key=_gs_quality, reverse=True)
+        top = _gs_quality(group[0])
+        best_group = [q for q in group if _gs_quality(q) == top]
+        uniq.append(random.choice(best_group))
+
+    def tier(q):
+        return 0 if (priority and "手記" in (q.get("file") or "")) else 1
+
+    # ② 分組：(tier, 句式模板)
+    buckets = {}
+    for q in uniq:
+        buckets.setdefault((tier(q), _gs_template(q.get("question"))), []).append(q)
+
+    picked = []
+    for t in (0, 1):                     # 先手記，後其餘
+        keys = [k for k in buckets if k[0] == t]
+        if not keys:
+            continue
+        keys.sort(key=lambda k: -len(buckets[k]))
+        for k in keys:
+            random.shuffle(buckets[k])
+        idx = {k: 0 for k in keys}
+        while len(picked) < count:       # 輪流：每種問法輪住出，確保題型平均
+            progressed = False
+            for k in keys:
+                if len(picked) >= count:
+                    break
+                if idx[k] < len(buckets[k]):
+                    picked.append(buckets[k][idx[k]])
+                    idx[k] += 1
+                    progressed = True
+            if not progressed:
+                break
+        if len(picked) >= count:
+            break
+    return picked
 
 
 def set_round(qs):
