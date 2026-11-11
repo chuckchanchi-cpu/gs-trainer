@@ -458,8 +458,50 @@ def parse_file(filepath):
     knowledge = extract_knowledge(content, filename)
     return {'unit':unit,'topic':topic,'questions':questions,'knowledge':knowledge}
 
+def _stem_key(q):
+    """正規化題幹，用嚟辨認「同一個問題」（去標點／全形／空白）"""
+    s = q.get('question') or ''
+    try:
+        s = unicodedata.normalize('NFKC', s)
+    except Exception:
+        pass
+    s = re.sub(r'[＿_]+', '＿', s)
+    return re.sub(r'[\s「」『』\"\'“”’（）()，,。．.、：:；;！!？?\-–—]+', '', s)
+
+
+def _quality(q):
+    """同一題幹多個版本時，判斷邊個資訊最完整（解釋 > 提示 > 選項數 > 答案長度）"""
+    return (
+        1 if (q.get('explanation') or '').strip() else 0,
+        1 if (q.get('hint') or '').strip() else 0,
+        len(q.get('options') or []),
+        len(q.get('answer') or ''),
+    )
+
+
+def dedupe_questions(questions):
+    """合併重複題幹：同一問題只保留資訊最完整嘅一題。
+    教材原文唔會改，只係載入時收斂，令學生唔會一輪撞同一條問題。"""
+    groups = {}
+    for q in questions:
+        groups.setdefault(_stem_key(q), []).append(q)
+    out = []
+    for key, group in groups.items():
+        if len(group) == 1:
+            out.append(group[0])
+            continue
+        group.sort(key=_quality, reverse=True)
+        top = _quality(group[0])
+        best = [q for q in group if _quality(q) == top]
+        # 同級：優先「手記」檔（考試常考），否則取第一個
+        hn = [q for q in best if '手記' in (q.get('file') or '')]
+        out.append(hn[0] if hn else best[0])
+    return out
+
+
 def load_all(base_dir):
-    """載入所有 .md，回傳 {topics:[], questions:[], knowledge:[]}"""
+    """載入所有 .md，回傳 {topics:[], questions:[], knowledge:[]}
+    題目會經 dedupe_questions() 收斂重複題幹（706 → 約 631）。"""
     files = [f for f in glob.glob(os.path.join(base_dir,'*.md')) if 'README' not in os.path.basename(f)]
     topics = {}; questions = []; knowledge = []
     for f in sorted(files):
@@ -469,6 +511,11 @@ def load_all(base_dir):
         questions += r['questions']
         if r['knowledge']:
             knowledge.append({'unit':r['unit'],'topic':r['topic'],'content':r['knowledge'],'file':os.path.basename(f)})
+    raw_n = len(questions)
+    questions = dedupe_questions(questions)
+    if raw_n != len(questions):
+        # 唔用 print 免污染 Streamlit；留個屬性俾 app 顯示
+        load_all.last_dedupe = (raw_n, len(questions))
     return {'topics':topics,'questions':questions,'knowledge':knowledge}
 
 # ============ 直接執行時的提示 ============
