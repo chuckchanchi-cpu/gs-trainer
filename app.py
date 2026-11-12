@@ -587,12 +587,12 @@ with st.sidebar:
                     pool = [q for q in all_questions if q["topic"] in chosen_topics]
                     if think_mode:
                         think_pool = filter_thinking(pool)
-                        if len(think_pool) < count:
-                            extra = filter_thinking([q for q in all_questions if q["topic"] not in chosen_topics])
-                            think_pool += extra
+                        # ⚠️ 唔可以由其他 topic 借題（會令平安題組夾雜動植物內容）
                         if not think_pool:
-                            st.warning("⚠️ 冇符合嘅思維題，已改用所選主題全部題目")
+                            st.warning("⚠️ 所選主題冇符合嘅思維題，已改用所選主題全部題目（唔會借其他主題）")
                             think_pool = pool
+                        elif len(think_pool) < count:
+                            st.info(f"ℹ️ 所選主題只有 {len(think_pool)} 條思維題，今輪出 {len(think_pool)} 題（唔會借其他主題）")
                         pool = think_pool
                     qs = pick_questions(pool, count, st.session_state.get("gs_handnote_priority", True))
                 if qs:
