@@ -459,6 +459,96 @@ st.caption("小六常識科 MCQ 訓練 — 揀主題 → 每輪出題 → 即場
 if "gs_questions" not in st.session_state: st.session_state.gs_questions = []
 if "gs_checked" not in st.session_state: st.session_state.gs_checked = False
 
+_GS_PLANT_KW = ("葉", "根", "莖", "花", "植物", "光合", "孢子", "樹", "草", "仙人掌", "蓮", "藤本", "板狀", "紅樹", "種子")
+_GS_ANIMAL_KW = ("動物", "腳", "鰓", "鱗", "羽毛", "毛髮", "哺乳", "爬行", "兩棲", "鳥", "魚", "昆蟲",
+                 "爪", "牙", "駱駝", "斑馬", "北極熊", "猩猩", "蝙蝠", "海豚", "龜", "蛙", "蛇", "獅子")
+
+
+def _gs_domain(text):
+    """粗略判斷文字屬於植物定動物範疇（用嚟避免跨類干擾項）"""
+    p = sum(1 for w in _GS_PLANT_KW if w in text)
+    a = sum(1 for w in _GS_ANIMAL_KW if w in text)
+    if p > a:
+        return "plant"
+    if a > p:
+        return "animal"
+    return None
+
+
+def _gs_shuffle_options(q):
+    """打亂選項次序（原本 84% 答案排第一位，學生盲揀 A 就中八成）"""
+    opts = list(q.get("options") or [])
+    if len(opts) < 2:
+        return q
+    ans = q.get("answer")
+    if ans not in opts:
+        return q
+    random.shuffle(opts)
+    out = dict(q)
+    out["options"] = opts
+    try:
+        out["answer_index"] = opts.index(ans)
+    except ValueError:
+        pass
+    return out
+
+
+def _gs_fix_options(q, pool_options):
+    """① 少過 4 個選項 → 由同範疇題目嘅選項補足
+       ② 干擾項跨類（問駱駝卻用葉片闊大）→ 換成同範疇干擾項"""
+    opts = list(q.get("options") or [])
+    ans = q.get("answer")
+    if not ans or ans not in opts:
+        return q
+    qd = _gs_domain(q.get("question", "") + " " + ans)
+
+    # ② 先換走跨類干擾項
+    if qd:
+        clean = [ans]
+        for o in opts:
+            if o == ans:
+                continue
+            od = _gs_domain(o)
+            if od and od != qd:
+                continue          # 跨類 → 棄用
+            clean.append(o)
+        # 由同範疇候選補返
+        if len(clean) < 4:
+            cands = [c for c in pool_options
+                     if c != ans and c not in clean and _gs_domain(c) == qd]
+            random.shuffle(cands)
+            for c in cands:
+                clean.append(c)
+                if len(clean) == 4:
+                    break
+        # 仍然唔夠 → 用其他選項填（總好過得一兩個選項）
+        if len(clean) < 4:
+            others = [c for c in pool_options if c != ans and c not in clean]
+            random.shuffle(others)
+            for c in others:
+                clean.append(c)
+                if len(clean) == 4:
+                    break
+        opts = clean[:4]
+
+    # ① 唔夠 4 個 → 補足
+    if len(opts) < 4:
+        others = [c for c in pool_options if c != ans and c not in opts]
+        random.shuffle(others)
+        for c in others:
+            opts.append(c)
+            if len(opts) == 4:
+                break
+
+    out = dict(q)
+    out["options"] = opts
+    try:
+        out["answer_index"] = opts.index(ans)
+    except ValueError:
+        out["answer_index"] = 0
+    return out
+
+
 def _gs_norm_stem(s):
     """正規化題幹：全形→半形、去空白標點，用嚟辨認『同一個問題』"""
     s = unicodedata.normalize("NFKC", s or "")
@@ -532,7 +622,20 @@ def pick_questions(pool, count, priority=True):
                 break
         if len(picked) >= count:
             break
-    return picked
+    # ④ 選項後處理：補足 4 個、換走跨類干擾項、打亂次序
+    pool_opts = []
+    for q in pool:
+        for o in (q.get("options") or []):
+            if o and o not in pool_opts:
+                pool_opts.append(o)
+    fixed = []
+    for q in picked:
+        if q.get("type") == "short" or not q.get("options"):
+            fixed.append(q)
+            continue
+        q2 = _gs_fix_options(q, pool_opts)
+        fixed.append(_gs_shuffle_options(q2))
+    return fixed
 
 
 def set_round(qs):
